@@ -1,0 +1,15 @@
+server:
+  port: 8080
+
+web-common:
+  # 全量默认配置示例（生产环境保持 expose-exception-message: false）
+  enabled: true
+  auto-wrap: true
+  success-message: 操作成功
+  expose-exception-message: false
+  error-codes:
+    - io.github.biglv666.webcommon.demo.DemoController$OrderErrorCode
+  log:
+    business-level: WARN
+    param-level: WARN
+    system-level: ERROR
