@@ -162,6 +162,9 @@
                     <tokenAuth>true</tokenAuth>
                     <autoPublish>true</autoPublish>
                     <waitUntil>published</waitUntil>
+                    <!-- sources/javadoc 已由显式配置的 maven-source/javadoc-plugin 附加，
+                         关闭本插件的内置生成，避免「duplicated artifacts」部署失败 -->
+                    <excludeBuiltIn>true</excludeBuiltIn>
                 </configuration>
             </plugin>
         </plugins>
