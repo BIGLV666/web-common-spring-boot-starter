@@ -103,11 +103,14 @@
                     </archive>
                 </configuration>
             </plugin>
-            <!-- Maven Central 要求附 sources jar -->
+            <!--
+                Central 要求附 sources jar。锁定 3.2.1：3.3.0 起新增的重复附加检查
+                与 central-publishing-maven-plugin 的 staging 重跑互斥，会导致部署失败。
+            -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-source-plugin</artifactId>
-                <version>3.3.0</version>
+                <version>3.2.1</version>
                 <executions>
                     <execution>
                         <id>attach-sources</id>
@@ -159,12 +162,8 @@
                 <extensions>true</extensions>
                 <configuration>
                     <publishingServerId>central</publishingServerId>
-                    <tokenAuth>true</tokenAuth>
                     <autoPublish>true</autoPublish>
                     <waitUntil>published</waitUntil>
-                    <!-- sources/javadoc 已由显式配置的 maven-source/javadoc-plugin 附加，
-                         关闭本插件的内置生成，避免「duplicated artifacts」部署失败 -->
-                    <excludeBuiltIn>true</excludeBuiltIn>
                 </configuration>
             </plugin>
         </plugins>
