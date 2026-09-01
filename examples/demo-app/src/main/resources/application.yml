@@ -6,7 +6,11 @@ web-common:
   enabled: true
   auto-wrap: true
   success-message: 操作成功
+  # HTTP 状态码模式：默认 ALWAYS_200（恒为 200）；改 SEMANTIC 后按错误码段映射，
+  # 40400→404、500→500、其余 4xxxx→400、5xxxx 业务码→200
+  http-status-mode: ALWAYS_200
   expose-exception-message: false
+  # 错误码枚举也可改用 @ErrorCodeScan 注解按包扫描注册（见 README「自定义错误码」）
   error-codes:
     - io.github.biglv666.webcommon.demo.DemoController$OrderErrorCode
   log:

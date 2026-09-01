@@ -13,7 +13,7 @@
 
     <groupId>io.github.biglv666</groupId>
     <artifactId>web-common-spring-boot-starter</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <packaging>jar</packaging>
 
     <name>web-common-spring-boot-starter</name>
@@ -73,6 +73,31 @@
             <version>2.2.30</version>
             <scope>provided</scope>
             <optional>true</optional>
+        </dependency>
+        <!--
+            Jackson 3（tools.jackson，Spring Boot 4 起为默认 JSON 库）：provided + optional，
+            仅供 Jackson3ResultJsonWriter 编译期可见。Boot 3.x 运行时走 Jackson 2 路径，
+            本依赖不向使用方传递；Boot 4 默认依赖树下则由使用方自带。
+            父 POM 是 Boot 3.5，不管理 tools.jackson 版本，故此处显式指定。
+        -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>3.2.2</version>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <!--
+            Jackson 3.2 要求 jackson-annotations 2.22+（JsonApplyView 为 2.22 新增），
+            显式提升覆盖父 POM 管理的 2.21，供 tools.jackson 编译与测试使用；
+            注解 API 向后兼容，@JsonInclude 等主代码用法不受影响。provided 不向使用方传递，
+            Boot 4 运行时的注解版本由其自身 BOM 管理。
+        -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+            <version>2.22</version>
+            <scope>provided</scope>
         </dependency>
         <!-- 自动装配开关属性的 IDE 提示元数据 -->
         <dependency>

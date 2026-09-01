@@ -59,12 +59,14 @@ public class ErrorCodeRegistry implements SmartInitializingSingleton {
      * @throws IllegalStateException 任一规则不满足时抛出，message 指明冲突来源
      */
     void validate() {
+        // 同一枚举可能同时被 yaml 配置与 @ErrorCodeScan 声明，去重避免自己和自己报冲突
+        List<Class<? extends ErrorCode>> distinctEnums = enumClasses.stream().distinct().toList();
         // 以内置码为基线，业务码逐个比对
         Map<Integer, String> seen = new LinkedHashMap<>();
         for (ResultCode code : ResultCode.values()) {
             seen.put(code.getCode(), "内置 ResultCode." + code.name());
         }
-        for (Class<? extends ErrorCode> enumClass : enumClasses) {
+        for (Class<? extends ErrorCode> enumClass : distinctEnums) {
             for (ErrorCode errorCode : constantsOf(enumClass)) {
                 checkSegment(enumClass, errorCode);
                 String previous = seen.put(errorCode.getCode(), enumClass.getName() + "#" + errorCode);
@@ -76,7 +78,7 @@ public class ErrorCodeRegistry implements SmartInitializingSingleton {
             }
         }
         log.info("错误码校验通过: 内置 {} 个 + 业务枚举 {} 个",
-                ResultCode.values().length, enumClasses.size());
+                ResultCode.values().length, distinctEnums.size());
     }
 
     /**

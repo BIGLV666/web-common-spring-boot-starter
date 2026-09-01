@@ -15,6 +15,7 @@ import java.util.List;
  * web-common:
  *     enabled: true                        # 是否启用统一返回与全局异常封装，默认 true
  *     auto-wrap: true                      # 是否启用响应自动包装，默认 true
+ *     http-status-mode: ALWAYS_200         # HTTP 状态码模式，默认恒为 200，可选 SEMANTIC
  *     expose-exception-message: false      # 兜底异常是否透出原始消息，默认 false
  *     error-codes:                         # 业务方错误码枚举，启动期做冲突校验
  *         - com.example.order.OrderErrorCode
@@ -54,8 +55,17 @@ public class WebCommonProperties {
     private boolean exposeExceptionMessage = false;
 
     /**
+     * HTTP 状态码模式，默认 {@link HttpStatusMode#ALWAYS_200}（HTTP 状态码恒为 200，
+     * 与 0.2.0 契约一致）；设为 {@link HttpStatusMode#SEMANTIC} 时按错误码段
+     * 映射语义化状态码（40400→404、500→500、4xxxx→400、5xxxx 业务码→200），
+     * 接入方需同步调整网关与监控策略。
+     */
+    private HttpStatusMode httpStatusMode = HttpStatusMode.ALWAYS_200;
+
+    /**
      * 业务方错误码枚举类全限定名列表。
      * 启动期由 {@code ErrorCodeRegistry} 做重复与分段校验，冲突即启动失败。
+     * 也可改用 {@code @ErrorCodeScan} 注解按包扫描注册，两种方式可并存。
      */
     private List<String> errorCodes = new ArrayList<>();
 
@@ -92,6 +102,14 @@ public class WebCommonProperties {
 
     public void setSuccessMessage(String successMessage) {
         this.successMessage = successMessage;
+    }
+
+    public HttpStatusMode getHttpStatusMode() {
+        return httpStatusMode;
+    }
+
+    public void setHttpStatusMode(HttpStatusMode httpStatusMode) {
+        this.httpStatusMode = httpStatusMode;
     }
 
     public List<String> getErrorCodes() {

@@ -1,12 +1,14 @@
 package io.github.biglv666.webcommon.web;
 
 import io.github.biglv666.webcommon.annotation.DefaultErrorCode;
+import io.github.biglv666.webcommon.config.HttpStatusMode;
 import io.github.biglv666.webcommon.config.WebCommonProperties;
 import io.github.biglv666.webcommon.exception.BusinessException;
 import io.github.biglv666.webcommon.result.ErrorCode;
 import io.github.biglv666.webcommon.result.Result;
 import io.github.biglv666.webcommon.result.ResultCode;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.ConversionNotSupportedException;
@@ -15,6 +17,7 @@ import org.springframework.boot.logging.LogLevel;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
+import org.springframework.validation.method.ParameterValidationResult;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -25,8 +28,11 @@ import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -36,21 +42,25 @@ import java.util.stream.Collectors;
 /**
  * 全局异常处理器，将各类异常统一转换为 {@link Result} 失败结构。
  *
- * <p>处理分支按优先级覆盖四类异常：</p>
+ * <p>处理分支按优先级覆盖以下异常：</p>
  * <ol>
  *     <li>{@link BusinessException}：业务代码主动抛出，code 取异常携带的错误码；</li>
- *     <li>参数类异常：{@code @Valid}/{@code @Validated} 校验失败、JSON 反序列化失败、
- *         请求方法/参数/类型错误等，统一返回 {@link ResultCode#PARAM_ERROR}，
- *         message 拼接「字段名: 原因」明细；</li>
- *     <li>{@link NoHandlerFoundException}：路径不存在，返回 {@link ResultCode#NOT_FOUND}；</li>
+ *     <li>参数类异常：{@code @Valid}/{@code @Validated} 校验失败（含 Spring 6.1+
+ *         方法参数内置校验的 {@link HandlerMethodValidationException}）、JSON 反序列化
+ *         失败、上传文件超限、请求方法/参数/类型错误等，统一返回
+ *         {@link ResultCode#PARAM_ERROR}，message 拼接「字段名: 原因」明细；</li>
+ *     <li>{@link NoHandlerFoundException}/{@link NoResourceFoundException}：路径不存在，
+ *         返回 {@link ResultCode#NOT_FOUND}；</li>
  *     <li>{@link Exception} 兜底：先识别异常类上的 {@link DefaultErrorCode} 注解
  *         （声明式业务异常），命中则按业务异常处理；未命中则统一返回
  *         {@link ResultCode#SYSTEM_ERROR}，堆栈只记录在服务端日志，
  *         响应体不透出任何内部细节，防止信息泄露。</li>
  * </ol>
  *
- * <p>所有响应的 HTTP 状态码恒为 200，成败由 code 字段区分。
- * 各分支日志级别可通过 {@code web-common.log.*} 配置调整，日志均携带请求 URI。</p>
+ * <p>HTTP 状态码默认恒为 200，成败由 code 字段区分；配置
+ * {@code web-common.http-status-mode=SEMANTIC} 后按错误码段映射语义化状态码
+ * （见 {@link HttpStatusCodeResolver}）。各分支日志级别可通过
+ * {@code web-common.log.*} 配置调整，日志均携带请求 URI。</p>
  *
  * <p>本类由自动装配注册为 Bean（可通过 {@code web-common.enabled=false} 关闭），
  * 业务方也可自行声明 {@code GlobalExceptionHandler} 类型的 Bean 覆盖默认实现。</p>
@@ -76,14 +86,16 @@ public class GlobalExceptionHandler {
      *
      * @param e       业务异常
      * @param request 当前请求，用于日志定位
+     * @param response 当前响应，semantic 模式下用于设置语义化状态码
      * @return code 取 {@code e.getErrorCode().getCode()} 的失败结果
      */
     @ExceptionHandler(BusinessException.class)
-    public Result<Void> handleBusinessException(BusinessException e, HttpServletRequest request) {
+    public Result<Void> handleBusinessException(BusinessException e, HttpServletRequest request,
+                                                HttpServletResponse response) {
         ErrorCode errorCode = e.getErrorCode();
         log(properties.getLog().getBusinessLevel(), false,
                 "业务异常: uri={}, code={}, message={}", request.getRequestURI(), errorCode.getCode(), e.getMessage());
-        return Result.fail(errorCode.getCode(), e.getMessage());
+        return respond(response, errorCode.getCode(), e.getMessage());
     }
 
     /**
@@ -95,13 +107,14 @@ public class GlobalExceptionHandler {
      * @return code=PARAM_ERROR 的失败结果
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public Result<Void> handleMethodArgumentNotValid(MethodArgumentNotValidException e, HttpServletRequest request) {
+    public Result<Void> handleMethodArgumentNotValid(MethodArgumentNotValidException e, HttpServletRequest request,
+                                                     HttpServletResponse response) {
         String detail = e.getBindingResult().getFieldErrors().stream()
                 .map(error -> error.getField() + ": " + error.getDefaultMessage())
                 .collect(Collectors.joining("; "));
         log(properties.getLog().getParamLevel(), false,
                 "请求体校验失败: uri={}, detail={}", request.getRequestURI(), detail);
-        return Result.fail(ResultCode.PARAM_ERROR, detail);
+        return respond(response, ResultCode.PARAM_ERROR, detail);
     }
 
     /**
@@ -112,13 +125,14 @@ public class GlobalExceptionHandler {
      * @return code=PARAM_ERROR 的失败结果
      */
     @ExceptionHandler(BindException.class)
-    public Result<Void> handleBindException(BindException e, HttpServletRequest request) {
+    public Result<Void> handleBindException(BindException e, HttpServletRequest request,
+                                            HttpServletResponse response) {
         String detail = e.getFieldErrors().stream()
                 .map(FieldError::getDefaultMessage)
                 .collect(Collectors.joining("; "));
         log(properties.getLog().getParamLevel(), false,
                 "参数绑定校验失败: uri={}, detail={}", request.getRequestURI(), detail);
-        return Result.fail(ResultCode.PARAM_ERROR, detail);
+        return respond(response, ResultCode.PARAM_ERROR, detail);
     }
 
     /**
@@ -130,13 +144,53 @@ public class GlobalExceptionHandler {
      * @return code=PARAM_ERROR 的失败结果
      */
     @ExceptionHandler(ConstraintViolationException.class)
-    public Result<Void> handleConstraintViolation(ConstraintViolationException e, HttpServletRequest request) {
+    public Result<Void> handleConstraintViolation(ConstraintViolationException e, HttpServletRequest request,
+                                                  HttpServletResponse response) {
         String detail = e.getConstraintViolations().stream()
                 .map(violation -> lastPathNode(violation) + ": " + violation.getMessage())
                 .collect(Collectors.joining("; "));
         log(properties.getLog().getParamLevel(), false,
                 "单参数校验失败: uri={}, detail={}", request.getRequestURI(), detail);
-        return Result.fail(ResultCode.PARAM_ERROR, detail);
+        return respond(response, ResultCode.PARAM_ERROR, detail);
+    }
+
+    /**
+     * 方法参数内置校验失败分支：Spring 6.1 起，{@code @RequestParam}/{@code @PathVariable}
+     * 等参数直接标注约束注解时，无需类级 {@code @Validated}，Spring MVC 内置校验
+     * 失败即抛出本异常。明细格式与单参数校验分支保持一致。
+     *
+     * @param e       方法参数内置校验异常
+     * @param request 当前请求
+     * @param response 当前响应，semantic 模式下用于设置语义化状态码
+     * @return code=PARAM_ERROR 的失败结果
+     */
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    public Result<Void> handleHandlerMethodValidation(HandlerMethodValidationException e, HttpServletRequest request,
+                                                      HttpServletResponse response) {
+        String detail = e.getParameterValidationResults().stream()
+                .flatMap(result -> result.getResolvableErrors().stream()
+                        .map(error -> parameterName(result) + ": " + error.getDefaultMessage()))
+                .collect(Collectors.joining("; "));
+        log(properties.getLog().getParamLevel(), false,
+                "方法参数内置校验失败: uri={}, detail={}", request.getRequestURI(), detail);
+        return respond(response, ResultCode.PARAM_ERROR, detail);
+    }
+
+    /**
+     * 上传文件超限分支：multipart 请求体或单文件大小超出配置上限时触发。
+     * 响应使用固定文案，不透出容器内部路径与临时文件信息，防止信息泄露。
+     *
+     * @param e       上传超限异常
+     * @param request 当前请求
+     * @param response 当前响应，semantic 模式下用于设置语义化状态码
+     * @return code=PARAM_ERROR 的失败结果
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public Result<Void> handleMaxUploadSize(MaxUploadSizeExceededException e, HttpServletRequest request,
+                                            HttpServletResponse response) {
+        log(properties.getLog().getParamLevel(), false,
+                "上传文件超限: uri={}, message={}", request.getRequestURI(), e.getMessage());
+        return respond(response, ResultCode.PARAM_ERROR, "上传文件过大");
     }
 
     /**
@@ -158,6 +212,7 @@ public class GlobalExceptionHandler {
      *
      * @param e       Spring MVC 请求处理异常
      * @param request 当前请求
+     * @param response 当前响应，semantic 模式下用于设置语义化状态码
      * @return code=PARAM_ERROR 的失败结果
      */
     @ExceptionHandler({
@@ -172,10 +227,11 @@ public class GlobalExceptionHandler {
             HttpMediaTypeNotAcceptableException.class,
             AsyncRequestTimeoutException.class
     })
-    public Result<Void> handleMvcClientError(Exception e, HttpServletRequest request) {
+    public Result<Void> handleMvcClientError(Exception e, HttpServletRequest request,
+                                             HttpServletResponse response) {
         log(properties.getLog().getParamLevel(), false,
                 "请求参数或方式错误: uri={}, message={}", request.getRequestURI(), e.getMessage());
-        return Result.fail(ResultCode.PARAM_ERROR, e.getMessage());
+        return respond(response, ResultCode.PARAM_ERROR, e.getMessage());
     }
 
     /**
@@ -183,13 +239,33 @@ public class GlobalExceptionHandler {
      *
      * @param e       无处理器异常
      * @param request 当前请求
+     * @param response 当前响应，semantic 模式下用于设置语义化状态码
      * @return code=NOT_FOUND 的失败结果
      */
     @ExceptionHandler(NoHandlerFoundException.class)
-    public Result<Void> handleNoHandlerFound(NoHandlerFoundException e, HttpServletRequest request) {
+    public Result<Void> handleNoHandlerFound(NoHandlerFoundException e, HttpServletRequest request,
+                                             HttpServletResponse response) {
         log(properties.getLog().getParamLevel(), false,
                 "请求路径不存在: uri={}", request.getRequestURI());
-        return Result.fail(ResultCode.NOT_FOUND, ResultCode.NOT_FOUND.getMessage());
+        return respond(response, ResultCode.NOT_FOUND, ResultCode.NOT_FOUND.getMessage());
+    }
+
+    /**
+     * 静态资源不存在分支：Spring 6.1 起，默认应用的未匹配路径会命中静态资源
+     * 处理器并抛出 {@link NoResourceFoundException}，而非 {@link NoHandlerFoundException}。
+     * 两个分支统一归入「路径不存在」，避免 404 落进系统错误兜底误导排障。
+     *
+     * @param e       资源不存在异常
+     * @param request 当前请求
+     * @param response 当前响应，semantic 模式下用于设置语义化状态码
+     * @return code=NOT_FOUND 的失败结果
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public Result<Void> handleNoResourceFound(NoResourceFoundException e, HttpServletRequest request,
+                                              HttpServletResponse response) {
+        log(properties.getLog().getParamLevel(), false,
+                "请求路径不存在: uri={}", request.getRequestURI());
+        return respond(response, ResultCode.NOT_FOUND, ResultCode.NOT_FOUND.getMessage());
     }
 
     /**
@@ -202,10 +278,12 @@ public class GlobalExceptionHandler {
      *
      * @param e       未识别异常
      * @param request 当前请求
+     * @param response 当前响应，semantic 模式下用于设置语义化状态码
      * @return code=SYSTEM_ERROR 或注解声明错误码的失败结果
      */
     @ExceptionHandler(Exception.class)
-    public Result<Void> handleException(Exception e, HttpServletRequest request) {
+    public Result<Void> handleException(Exception e, HttpServletRequest request,
+                                        HttpServletResponse response) {
         DefaultErrorCode declared = findDeclaredErrorCode(e.getClass());
         if (declared != null) {
             // 声明式业务异常：message 取异常自身文案，为空回退错误码默认文案
@@ -214,13 +292,42 @@ public class GlobalExceptionHandler {
             log(properties.getLog().getBusinessLevel(), false,
                     "声明式业务异常: uri={}, code={}, message={}",
                     request.getRequestURI(), errorCode.getCode(), message);
-            return Result.fail(errorCode.getCode(), message);
+            return respond(response, errorCode.getCode(), message);
         }
         log(properties.getLog().getSystemLevel(), true, "未捕获系统异常: uri={}", request.getRequestURI(), e);
         String message = properties.isExposeExceptionMessage()
                 ? e.getMessage()
                 : ResultCode.SYSTEM_ERROR.getMessage();
-        return Result.fail(ResultCode.SYSTEM_ERROR.getCode(), message);
+        return respond(response, ResultCode.SYSTEM_ERROR.getCode(), message);
+    }
+
+    /**
+     * 构造失败结果并按配置应用 HTTP 状态码（{@link ErrorCode} 重载）。
+     *
+     * @param response 当前响应
+     * @param errorCode 错误码
+     * @param message   提示信息
+     * @return 携带错误码与提示的失败结果
+     */
+    private Result<Void> respond(HttpServletResponse response, ErrorCode errorCode, String message) {
+        return respond(response, errorCode.getCode(), message);
+    }
+
+    /**
+     * 构造失败结果并按配置应用 HTTP 状态码：默认恒为 200；
+     * semantic 模式下按错误码段映射（见 {@link HttpStatusCodeResolver}）。
+     *
+     * @param response 当前响应
+     * @param code     错误码数值
+     * @param message  提示信息
+     * @return 携带错误码与提示的失败结果
+     */
+    private Result<Void> respond(HttpServletResponse response, int code, String message) {
+        Result<Void> result = Result.fail(code, message);
+        if (properties.getHttpStatusMode() == HttpStatusMode.SEMANTIC) {
+            response.setStatus(HttpStatusCodeResolver.resolve(code));
+        }
+        return result;
     }
 
     /**
@@ -314,5 +421,17 @@ public class GlobalExceptionHandler {
         String path = violation.getPropertyPath().toString();
         int index = path.lastIndexOf('.');
         return index >= 0 ? path.substring(index + 1) : path;
+    }
+
+    /**
+     * 取方法参数内置校验结果的参数名。未开启 {@code -parameters} 编译参数时
+     * 拿不到真实参数名，回退为「参数」，保证明细仍可读。
+     *
+     * @param result 方法参数校验结果
+     * @return 参数名或回退占位
+     */
+    private String parameterName(ParameterValidationResult result) {
+        String name = result.getMethodParameter().getParameterName();
+        return name != null ? name : "参数";
     }
 }

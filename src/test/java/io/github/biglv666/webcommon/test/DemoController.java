@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 /**
  * 集成测试用 demo 控制器，覆盖统一返回与全局异常处理的四条典型路径。
@@ -110,6 +111,15 @@ public class DemoController {
     @GetMapping("/demo/custom-code")
     public Result<Void> customCode() {
         throw new BusinessException(TestOrderErrorCode.STOCK_NOT_ENOUGH);
+    }
+
+    /**
+     * 上传超限路径：MockMvc 不经过容器真实的 multipart 解析，无法自然触发
+     * MaxUploadSizeExceededException，这里直接抛出以覆盖异常映射分支本身。
+     */
+    @PostMapping("/demo/upload-oversize")
+    public Result<Void> uploadOversize() {
+        throw new MaxUploadSizeExceededException(1024);
     }
 
     /**

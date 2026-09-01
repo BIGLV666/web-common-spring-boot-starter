@@ -8,11 +8,11 @@
 <dependency>
     <groupId>io.github.biglv666</groupId>
     <artifactId>web-common-spring-boot-starter</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
 </dependency>
 ```
 
-要求：Spring Boot 3.x（Servlet Web 应用）、Java 17+。
+要求：Spring Boot 3.x 或 4.x（Servlet Web 应用）、Java 17+。String 返回值的自动包装序列化会按类路径自动适配 Jackson 2（Boot 3.x 默认）与 Jackson 3（Boot 4 默认），使用方无需额外引入 JSON 依赖。
 
 ## 统一返回结构
 
@@ -77,6 +77,14 @@ public enum OrderErrorCode implements ErrorCode {
 }
 ```
 
+嫌逐个写类名麻烦时，也可以在任意 `@Configuration` 配置类上标注 `@ErrorCodeScan`，按包扫描 `ErrorCode` 枚举自动注册（未指定包时默认扫描标注类所在包），两种方式可并存：
+
+```java
+@Configuration
+@ErrorCodeScan("com.example.order")
+public class WebConfig { }
+```
+
 启动时 starter 会校验**重复码、越段码（只允许 0、500、40000~59999）、保留值（0/500）**，冲突直接启动失败——错误码冲突拖到运行期才暴露是排障灾难。错误码分段约定：`0` 成功；`4xxxx` 客户端侧；`5xxxx` 业务侧；`500` 系统兜底。内置码适用场景见 `ResultCode` 各常量的 Javadoc。
 
 ## 全局异常处理覆盖范围
@@ -87,10 +95,21 @@ public enum OrderErrorCode implements ErrorCode {
 | `@DefaultErrorCode` 注解的自定义异常 | 注解声明的错误码与异常文案 |
 | `@Valid` 请求体 / 表单校验失败 | `40000` + 「字段名： 原因」明细 |
 | `@Validated` 单参数校验失败 | `40000` + 「参数名： 原因」明细 |
+| 方法参数直接标注约束注解（Spring 6.1+ 内置校验） | `40000` + 「参数名： 原因」明细 |
 | JSON 反序列化失败 | `40000` 请求体格式错误 |
+| 上传文件超出大小上限 | `40000` 上传文件过大 |
 | 方法不支持 / 参数缺失 / 类型转换失败等 | `40000` |
-| 路径不存在 | `40400` |
+| 路径不存在（含 Spring 6.1+ 静态资源未命中） | `40400` |
 | 其他未识别异常 | `500` 系统繁忙，堆栈只进日志 |
+
+## HTTP 状态码模式
+
+默认 HTTP 状态码恒为 200，成败由 `code` 区分。需要网关、监控识别语义化状态码时，可开启 `semantic` 模式：`0`→200；`40400`→404；`500`→500；其余 `4xxxx`→400；`5xxxx` 业务码→200（业务失败不是服务端故障，返回 5xx 会误触发网关告警与重试）。开启后响应体结构不变，但接入方需同步调整网关与监控策略：
+
+```yaml
+web-common:
+  http-status-mode: SEMANTIC   # 默认 ALWAYS_200，与 0.2.0 契约一致
+```
 
 ## 配置项
 
@@ -99,8 +118,9 @@ web-common:
   enabled: true                     # 默认 true，设为 false 整体关闭封装
   auto-wrap: true                   # 默认 true，响应自动包装开关
   success-message: 操作成功          # 成功响应文案，可整体替换（如「载入成功」「OK」）
+  http-status-mode: ALWAYS_200      # 默认恒为 200；SEMANTIC 按错误码段映射语义化状态码
   expose-exception-message: false   # 默认 false；联调时临时开启透出异常消息，生产必须关闭
-  error-codes:                      # 业务错误码枚举，启动期冲突校验
+  error-codes:                      # 业务错误码枚举，启动期冲突校验（也可用 @ErrorCodeScan）
     - com.example.order.OrderErrorCode
   log:
     business-level: WARN            # 业务异常日志级别，默认 WARN
@@ -123,12 +143,12 @@ web-common:
 维护者推送 `v*` 标签即自动发布到 Maven Central（GitHub Actions，见 `.github/workflows/publish.yml`）：
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 ## 本地构建
 
 ```bash
-mvnw test        # 运行集成测试（18 个用例）
+mvnw test        # 运行集成测试（40 个用例）
 mvnw package     # 打包（jar + sources + javadoc）
 ```

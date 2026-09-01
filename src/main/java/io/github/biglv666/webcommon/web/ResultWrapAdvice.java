@@ -1,6 +1,5 @@
 package io.github.biglv666.webcommon.web;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.biglv666.webcommon.annotation.NoWrap;
 import io.github.biglv666.webcommon.result.Result;
 import org.springframework.core.MethodParameter;
@@ -24,7 +23,9 @@ import java.lang.reflect.Type;
  *     <li>方法或类上标注 {@link NoWrap} 的豁免（文件下载、健康检查等）；</li>
  *     <li>返回类型为 void（如某些写操作只回 200 空体）的跳过，不改变空响应语义；</li>
  *     <li>返回 String 时因 Spring 走 {@link StringHttpMessageConverter}，
- *         直接包装对象会被当成字符串内容，此处手动序列化为 JSON 字符串再交出。</li>
+ *         直接包装对象会被当成字符串内容，需先序列化为 JSON 字符串再交出；
+ *         序列化由 {@link ResultJsonWriter} 完成，自动适配 Jackson 2 / Jackson 3
+ *         （Spring Boot 4 起默认），本类不直接依赖任何 Jackson 类型。</li>
  * </ul>
  *
  * <p>本通知只包装成功路径；异常统一由 {@link GlobalExceptionHandler} 处理。</p>
@@ -32,18 +33,18 @@ import java.lang.reflect.Type;
 @RestControllerAdvice
 public class ResultWrapAdvice implements ResponseBodyAdvice<Object> {
 
-    private final ObjectMapper objectMapper;
+    private final ResultJsonWriter jsonWriter;
 
     private final String successMessage;
 
     /**
      * 构造自动包装通知。
      *
-     * @param objectMapper   Spring MVC 默认注册的 Jackson ObjectMapper，仅用于 String 返回的手动序列化
+     * @param jsonWriter     String 返回的 JSON 序列化器，按类路径适配 Jackson 2/3
      * @param successMessage 成功响应文案，取自 {@code web-common.success-message}
      */
-    public ResultWrapAdvice(ObjectMapper objectMapper, String successMessage) {
-        this.objectMapper = objectMapper;
+    public ResultWrapAdvice(ResultJsonWriter jsonWriter, String successMessage) {
+        this.jsonWriter = jsonWriter;
         this.successMessage = successMessage;
     }
 
@@ -100,14 +101,10 @@ public class ResultWrapAdvice implements ResponseBodyAdvice<Object> {
         // 自动包装路径按配置取成功文案，不依赖静态默认值，避免多应用同 JVM 场景串配置
         wrapped.setMessage(successMessage);
         // String 走 StringHttpMessageConverter：包装对象再交出会被 toString 成 {"code":...} 字面量，
-        // 必须手动序列化成 JSON 字符串
+        // 必须先序列化成 JSON 字符串；具体实现按类路径适配 Jackson 2/3
         if (returnType.getParameterType() == String.class
                 && StringHttpMessageConverter.class.isAssignableFrom(converterType)) {
-            try {
-                return objectMapper.writeValueAsString(wrapped);
-            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-                throw new IllegalStateException("String 返回值包装序列化失败", e);
-            }
+            return jsonWriter.toJson(wrapped);
         }
         return wrapped;
     }

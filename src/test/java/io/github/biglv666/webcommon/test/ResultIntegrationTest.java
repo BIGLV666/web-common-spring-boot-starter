@@ -78,6 +78,40 @@ class ResultIntegrationTest {
     }
 
     /**
+     * 方法参数内置校验失败路径（类上无 @Validated）：默认 always-200 模式下
+     * HTTP 状态保持 200，code=40000 且明细格式与单参数校验一致。
+     */
+    @Test
+    void handlerMethodValidationReturnsParamError() throws Exception {
+        mockMvc.perform(get("/demo/method-validation").param("page", "-5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(40000))
+                .andExpect(jsonPath("$.message", containsString("page: 页码必须为正数")));
+    }
+
+    /**
+     * 上传超限路径：返回 40000 固定文案，默认 always-200 模式下 HTTP 状态保持 200。
+     */
+    @Test
+    void maxUploadSizeReturnsParamError() throws Exception {
+        mockMvc.perform(post("/demo/upload-oversize"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(40000))
+                .andExpect(jsonPath("$.message").value("上传文件过大"));
+    }
+
+    /**
+     * 路径不存在路径：Spring 6.1+ 默认抛 NoResourceFoundException，应返回 40400。
+     */
+    @Test
+    void notFoundReturnsNotFoundCode() throws Exception {
+        mockMvc.perform(get("/demo/not-exist-path"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(40400))
+                .andExpect(jsonPath("$.message").value("资源不存在"));
+    }
+
+    /**
      * 兜底路径：未识别异常返回 SYSTEM_ERROR，且响应体不泄露内部异常细节。
      */
     @Test
