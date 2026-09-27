@@ -1,5 +1,7 @@
 # web-common-spring-boot-starter
 
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.biglv666/web-common-spring-boot-starter)](https://central.sonatype.com/artifact/io.github.biglv666/web-common-spring-boot-starter) [![Build](https://github.com/BIGLV666/web-common-spring-boot-starter/actions/workflows/build.yml/badge.svg)](https://github.com/BIGLV666/web-common-spring-boot-starter/actions/workflows/build.yml)
+
 轻量级 Web 层通用封装 Spring Boot Starter：统一 `Result` 返回体 + 分段错误码枚举 + 全局异常处理 + 响应自动包装。引入依赖即生效，零代码、零配置。
 
 ## 快速开始
