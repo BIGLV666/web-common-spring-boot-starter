@@ -24,7 +24,7 @@
         <dependency>
             <groupId>io.github.biglv666</groupId>
             <artifactId>web-common-spring-boot-starter</artifactId>
-            <version>0.2.0</version>
+            <version>0.3.0</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

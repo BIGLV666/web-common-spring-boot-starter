@@ -57,6 +57,15 @@ public class DemoController {
     }
 
     /**
+     * 请求体反序列化路径：不加校验注解，用于覆盖 JSON 反序列化失败分支
+     * （类型不匹配透出字段路径、格式错误返回固定文案）。
+     */
+    @PostMapping("/demo/deserialize")
+    public Result<CreateUserRequest> deserialize(@RequestBody CreateUserRequest request) {
+        return Result.ok(request);
+    }
+
+    /**
      * 路径四：未识别异常，应由兜底分支返回 SYSTEM_ERROR 且不泄露内部细节。
      */
     @GetMapping("/demo/unknown")

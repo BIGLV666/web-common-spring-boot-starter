@@ -4,6 +4,8 @@
 
 轻量级 Web 层通用封装 Spring Boot Starter：统一 `Result` 返回体 + 分段错误码枚举 + 全局异常处理 + 响应自动包装。引入依赖即生效，零代码、零配置。
 
+[English](README.en.md)
+
 ## 快速开始
 
 ```xml
@@ -89,20 +91,46 @@ public class WebConfig { }
 
 启动时 starter 会校验**重复码、越段码（只允许 0、500、40000~59999）、保留值（0/500）**，冲突直接启动失败——错误码冲突拖到运行期才暴露是排障灾难。错误码分段约定：`0` 成功；`4xxxx` 客户端侧；`5xxxx` 业务侧；`500` 系统兜底。内置码适用场景见 `ResultCode` 各常量的 Javadoc。
 
+## 错误码字典端点
+
+错误码分散在各业务枚举里，靠人肉同步给前端和测试容易错漏。在任意 `@Configuration` 配置类上标注 `@EnableErrorCodeEndpoint`，即可开启 `GET /web-common/error-codes`：
+
+```java
+@Configuration
+@EnableErrorCodeEndpoint
+public class WebConfig { }
+```
+
+端点输出启动期校验通过的全量错误码（内置码 + 业务声明码，含默认文案与来源枚举，按 code 升序），前端、测试与网关直接取用，无需任何配置；默认关闭，标注即开启：
+
+```json
+{
+  "code": 0, "message": "操作成功",
+  "data": [
+    { "code": 40000, "message": "参数错误", "enumClass": "...ResultCode", "constant": "PARAM_ERROR" },
+    { "code": 51001, "message": "库存不足", "enumClass": "com.example.order.OrderErrorCode", "constant": "STOCK_NOT_ENOUGH" }
+  ]
+}
+```
+
+固定路径与业务路由冲突或需要自定义输出形态时，可自建 Controller 注入 `ErrorCodeRegistry`，调用 `descriptors()` 读取同一份字典。
+
 ## 全局异常处理覆盖范围
 
 | 异常 | 返回 |
 |---|---|
 | `BusinessException` | 异常携带的错误码与文案 |
 | `@DefaultErrorCode` 注解的自定义异常 | 注解声明的错误码与异常文案 |
-| `@Valid` 请求体 / 表单校验失败 | `40000` + 「字段名： 原因」明细 |
-| `@Validated` 单参数校验失败 | `40000` + 「参数名： 原因」明细 |
-| 方法参数直接标注约束注解（Spring 6.1+ 内置校验） | `40000` + 「参数名： 原因」明细 |
-| JSON 反序列化失败 | `40000` 请求体格式错误 |
+| `@Valid` 请求体 / 表单校验失败 | `40000` + 「字段名： 原因」明细，`data` 携带结构化明细列表 |
+| `@Validated` 单参数校验失败 | `40000` + 「参数名： 原因」明细，`data` 携带结构化明细列表 |
+| 方法参数直接标注约束注解（Spring 6.1+ 内置校验） | `40000` + 「参数名： 原因」明细，`data` 携带结构化明细列表 |
+| JSON 反序列化失败 | `40000` 请求体格式错误（类型不匹配时 message 附出错字段路径，如 `字段 orders[0].count 类型不匹配`） |
 | 上传文件超出大小上限 | `40000` 上传文件过大 |
 | 方法不支持 / 参数缺失 / 类型转换失败等 | `40000` |
 | 路径不存在（含 Spring 6.1+ 静态资源未命中） | `40400` |
 | 其他未识别异常 | `500` 系统繁忙，堆栈只进日志 |
+
+校验类失败的结构化明细形如 `"data": [{ "field": "age", "message": "年龄必须为正数" }]`，前端可按字段直接标红表单；message 中的拼接文本保持不变，供日志与人读。其余失败场景 `data` 不输出。反序列化字段路径只透出 JSON 字段名，不泄露目标类型与内部类名。
 
 ## HTTP 状态码模式
 
@@ -151,6 +179,6 @@ git tag v0.3.0 && git push origin v0.3.0
 ## 本地构建
 
 ```bash
-mvnw test        # 运行集成测试（40 个用例）
+mvnw test        # 运行集成测试（49 个用例）
 mvnw package     # 打包（jar + sources + javadoc）
 ```

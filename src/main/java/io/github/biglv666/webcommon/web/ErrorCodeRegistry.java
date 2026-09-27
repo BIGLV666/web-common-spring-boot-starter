@@ -82,6 +82,28 @@ public class ErrorCodeRegistry implements SmartInitializingSingleton {
     }
 
     /**
+     * 输出全量错误码字典（内置码 + 业务枚举码），按 code 升序。
+     *
+     * <p>与启动期校验同源，字典中的 code 与文案即运行期实际生效值；
+     * 供错误码字典端点或使用方自行导出文档（前端联调、测试断言、网关配置）。</p>
+     *
+     * @return 按 code 升序排列的错误码条目
+     */
+    public List<ErrorCodeDescriptor> descriptors() {
+        List<ErrorCodeDescriptor> descriptors = new ArrayList<>();
+        for (ResultCode code : ResultCode.values()) {
+            descriptors.add(ErrorCodeDescriptor.of(code, ResultCode.class));
+        }
+        for (Class<? extends ErrorCode> enumClass : enumClasses.stream().distinct().toList()) {
+            for (ErrorCode errorCode : constantsOf(enumClass)) {
+                descriptors.add(ErrorCodeDescriptor.of(errorCode, enumClass));
+            }
+        }
+        descriptors.sort(Comparator.comparingInt(ErrorCodeDescriptor::code));
+        return descriptors;
+    }
+
+    /**
      * 校验单个错误码的分段规则。
      *
      * @param enumClass  所属枚举类

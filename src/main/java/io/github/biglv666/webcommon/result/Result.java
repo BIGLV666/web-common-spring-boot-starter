@@ -11,7 +11,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
  * {
  *     "code": 0,          // 错误码，0 表示成功，其余见 ErrorCode
  *     "message": "操作成功", // 提示信息，成功时为固定文案，失败时为可读错误描述
- *     "data": {...}        // 业务数据，失败时为 null（序列化时省略）
+ *     "data": {...}        // 业务数据；参数校验失败时为校验明细列表，其余失败为 null（序列化时省略）
  * }
  * }</pre>
  *
@@ -49,8 +49,11 @@ public class Result<T> {
             example = "操作成功", requiredMode = Schema.RequiredMode.REQUIRED)
     private String message;
 
-    /** 业务数据，失败时为 null 且不参与 JSON 序列化 */
-    @Schema(description = "业务数据，失败时省略该字段")
+    /**
+     * 业务数据。参数校验失败（code=40000）时为 {@link ParamErrorItem} 明细列表，
+     * 供程序解析（如前端按字段标红表单）；其余失败场景为 null 且不参与 JSON 序列化。
+     */
+    @Schema(description = "业务数据；参数校验失败时为校验明细列表，其余失败场景省略该字段")
     private T data;
 
     public Result() {

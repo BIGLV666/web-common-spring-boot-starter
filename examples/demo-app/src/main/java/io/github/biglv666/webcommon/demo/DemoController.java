@@ -71,11 +71,20 @@ public class DemoController {
     }
 
     /**
-     * 参数校验：校验失败返回 40000 与「字段名: 原因」明细。
+     * 参数校验：校验失败返回 40000 与「字段名: 原因」明细，data 携带结构化明细列表。
      */
     @PostMapping("/register")
     public Result<Void> register(@Valid @RequestBody RegisterRequest request) {
         return Result.ok();
+    }
+
+    /**
+     * 请求体反序列化：不加校验注解，类型不匹配时 40000 的 message
+     * 会附带出错字段路径（如「字段 count 类型不匹配」）。
+     */
+    @PostMapping("/orders")
+    public Result<OrderVO> createOrder(@RequestBody OrderRequest request) {
+        return Result.ok(new OrderVO("20260904001", request.count()));
     }
 
     /**
@@ -136,5 +145,17 @@ public class DemoController {
         public void setUsername(String username) {
             this.username = username;
         }
+    }
+
+    /**
+     * 下单请求体：count 为数值字段，用于反序列化类型不匹配演示。
+     */
+    public record OrderRequest(int count) {
+    }
+
+    /**
+     * 下单响应业务对象。
+     */
+    public record OrderVO(String orderNo, int count) {
     }
 }

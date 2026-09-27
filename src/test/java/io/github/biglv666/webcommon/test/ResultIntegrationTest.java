@@ -9,6 +9,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -42,18 +43,49 @@ class ResultIntegrationTest {
     }
 
     /**
-     * 业务异常路径：code 取异常携带的错误码，message 为业务自定义文案。
+     * 业务异常路径：code 取异常携带的错误码，message 为业务自定义文案；
+     * 非校验类失败不携带 data（序列化时省略）。
      */
     @Test
     void businessExceptionReturnsConflictCodeWithCustomMessage() throws Exception {
         mockMvc.perform(get("/demo/biz"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(40900))
-                .andExpect(jsonPath("$.message").value("用户名已被注册"));
+                .andExpect(jsonPath("$.message").value("用户名已被注册"))
+                .andExpect(jsonPath("$.data").doesNotExist());
     }
 
     /**
-     * 请求体校验失败路径：code=40000，message 含字段名与原因明细。
+     * 请求体类型不匹配路径：message 附带出错字段路径（Jackson InvalidFormatException
+     * 提取），便于前端定位到具体字段，但不泄露目标类型与类名。
+     */
+    @Test
+    void deserializeTypeMismatchReturnsFieldPath() throws Exception {
+        mockMvc.perform(post("/demo/deserialize")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"张三\",\"age\":\"abc\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(40000))
+                .andExpect(jsonPath("$.message", containsString("字段 age")))
+                .andExpect(jsonPath("$.message", containsString("类型不匹配")));
+    }
+
+    /**
+     * 请求体格式错误路径：无法定位字段时回退固定文案。
+     */
+    @Test
+    void deserializeMalformedJsonReturnsFixedMessage() throws Exception {
+        mockMvc.perform(post("/demo/deserialize")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(40000))
+                .andExpect(jsonPath("$.message").value("请求体格式错误"));
+    }
+
+    /**
+     * 请求体校验失败路径：code=40000，message 含字段名与原因明细，
+     * 同时 data 携带结构化校验明细（field/message）供程序解析。
      */
     @Test
     void validationFailureReturnsParamErrorWithFieldDetail() throws Exception {
@@ -63,18 +95,22 @@ class ResultIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(40000))
                 .andExpect(jsonPath("$.message", containsString("name: 姓名不能为空")))
-                .andExpect(jsonPath("$.message", containsString("age: 年龄必须为正数")));
+                .andExpect(jsonPath("$.message", containsString("age: 年龄必须为正数")))
+                .andExpect(jsonPath("$.data[?(@.field == 'name')].message", hasItem("姓名不能为空")))
+                .andExpect(jsonPath("$.data[?(@.field == 'age')].message", hasItem("年龄必须为正数")));
     }
 
     /**
-     * 单参数校验失败路径：@RequestParam 约束失败同样返回 40000。
+     * 单参数校验失败路径：@RequestParam 约束失败同样返回 40000，
+     * data 携带参数名与原因的结构化明细。
      */
     @Test
     void singleParamValidationReturnsParamError() throws Exception {
         mockMvc.perform(get("/demo/param").param("page", "-5"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(40000))
-                .andExpect(jsonPath("$.message", containsString("page: 页码必须为正数")));
+                .andExpect(jsonPath("$.message", containsString("page: 页码必须为正数")))
+                .andExpect(jsonPath("$.data[?(@.field == 'page')].message", hasItem("页码必须为正数")));
     }
 
     /**

@@ -5,6 +5,7 @@ import io.github.biglv666.webcommon.config.HttpStatusMode;
 import io.github.biglv666.webcommon.config.WebCommonProperties;
 import io.github.biglv666.webcommon.exception.BusinessException;
 import io.github.biglv666.webcommon.result.ErrorCode;
+import io.github.biglv666.webcommon.result.ParamErrorItem;
 import io.github.biglv666.webcommon.result.Result;
 import io.github.biglv666.webcommon.result.ResultCode;
 import jakarta.servlet.http.HttpServletRequest;
@@ -16,7 +17,6 @@ import org.springframework.beans.TypeMismatchException;
 import org.springframework.boot.logging.LogLevel;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
-import org.springframework.validation.FieldError;
 import org.springframework.validation.method.ParameterValidationResult;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -37,6 +37,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.stream.Collectors;
 
 /**
@@ -48,7 +49,9 @@ import java.util.stream.Collectors;
  *     <li>参数类异常：{@code @Valid}/{@code @Validated} 校验失败（含 Spring 6.1+
  *         方法参数内置校验的 {@link HandlerMethodValidationException}）、JSON 反序列化
  *         失败、上传文件超限、请求方法/参数/类型错误等，统一返回
- *         {@link ResultCode#PARAM_ERROR}，message 拼接「字段名: 原因」明细；</li>
+ *         {@link ResultCode#PARAM_ERROR}；校验类分支 message 拼接「字段名: 原因」明细，
+ *         同时 data 携带 {@link ParamErrorItem} 列表供程序解析；反序列化分支在类型
+ *         不匹配时 message 附带出错字段路径；</li>
  *     <li>{@link NoHandlerFoundException}/{@link NoResourceFoundException}：路径不存在，
  *         返回 {@link ResultCode#NOT_FOUND}；</li>
  *     <li>{@link Exception} 兜底：先识别异常类上的 {@link DefaultErrorCode} 注解
@@ -100,58 +103,66 @@ public class GlobalExceptionHandler {
 
     /**
      * 请求体校验失败分支：{@code @Valid} 注解在 {@code @RequestBody} 上校验失败时触发。
-     * 响应 message 拼接所有未通过字段的「字段名: 原因」，便于前端定位。
+     * 响应 message 拼接所有未通过字段的「字段名: 原因」，同时 data 携带
+     * {@link ParamErrorItem} 明细列表供程序解析，便于前端按字段标红表单。
      *
      * @param e       校验异常
      * @param request 当前请求
-     * @return code=PARAM_ERROR 的失败结果
+     * @return code=PARAM_ERROR 的失败结果，data 为校验明细列表
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public Result<Void> handleMethodArgumentNotValid(MethodArgumentNotValidException e, HttpServletRequest request,
-                                                     HttpServletResponse response) {
-        String detail = e.getBindingResult().getFieldErrors().stream()
-                .map(error -> error.getField() + ": " + error.getDefaultMessage())
-                .collect(Collectors.joining("; "));
+    public Result<List<ParamErrorItem>> handleMethodArgumentNotValid(MethodArgumentNotValidException e,
+                                                                     HttpServletRequest request,
+                                                                     HttpServletResponse response) {
+        List<ParamErrorItem> items = e.getBindingResult().getFieldErrors().stream()
+                .map(error -> new ParamErrorItem(error.getField(), error.getDefaultMessage()))
+                .toList();
+        String detail = joinParamDetail(items);
         log(properties.getLog().getParamLevel(), false,
                 "请求体校验失败: uri={}, detail={}", request.getRequestURI(), detail);
-        return respond(response, ResultCode.PARAM_ERROR, detail);
+        return respond(response, ResultCode.PARAM_ERROR, detail, items);
     }
 
     /**
      * 表单绑定校验失败分支：{@code @Valid} 注解在非请求体（如表单提交）上校验失败时触发。
+     * message 与 data 的关系同请求体校验分支。
      *
      * @param e       绑定异常
      * @param request 当前请求
-     * @return code=PARAM_ERROR 的失败结果
+     * @return code=PARAM_ERROR 的失败结果，data 为校验明细列表
      */
     @ExceptionHandler(BindException.class)
-    public Result<Void> handleBindException(BindException e, HttpServletRequest request,
-                                            HttpServletResponse response) {
-        String detail = e.getFieldErrors().stream()
-                .map(FieldError::getDefaultMessage)
-                .collect(Collectors.joining("; "));
+    public Result<List<ParamErrorItem>> handleBindException(BindException e, HttpServletRequest request,
+                                                            HttpServletResponse response) {
+        List<ParamErrorItem> items = e.getFieldErrors().stream()
+                .map(error -> new ParamErrorItem(error.getField(), error.getDefaultMessage()))
+                .toList();
+        String detail = joinParamDetail(items);
         log(properties.getLog().getParamLevel(), false,
                 "参数绑定校验失败: uri={}, detail={}", request.getRequestURI(), detail);
-        return respond(response, ResultCode.PARAM_ERROR, detail);
+        return respond(response, ResultCode.PARAM_ERROR, detail, items);
     }
 
     /**
      * 单参数校验失败分支：类上标注 {@code @Validated} 时，
      * {@code @RequestParam}/{@code @PathVariable} 上的约束注解校验失败触发。
+     * message 与 data 的关系同请求体校验分支。
      *
      * @param e       约束校验异常
      * @param request 当前请求
-     * @return code=PARAM_ERROR 的失败结果
+     * @return code=PARAM_ERROR 的失败结果，data 为校验明细列表
      */
     @ExceptionHandler(ConstraintViolationException.class)
-    public Result<Void> handleConstraintViolation(ConstraintViolationException e, HttpServletRequest request,
-                                                  HttpServletResponse response) {
-        String detail = e.getConstraintViolations().stream()
-                .map(violation -> lastPathNode(violation) + ": " + violation.getMessage())
-                .collect(Collectors.joining("; "));
+    public Result<List<ParamErrorItem>> handleConstraintViolation(ConstraintViolationException e,
+                                                                  HttpServletRequest request,
+                                                                  HttpServletResponse response) {
+        List<ParamErrorItem> items = e.getConstraintViolations().stream()
+                .map(violation -> new ParamErrorItem(lastPathNode(violation), violation.getMessage()))
+                .toList();
+        String detail = joinParamDetail(items);
         log(properties.getLog().getParamLevel(), false,
                 "单参数校验失败: uri={}, detail={}", request.getRequestURI(), detail);
-        return respond(response, ResultCode.PARAM_ERROR, detail);
+        return respond(response, ResultCode.PARAM_ERROR, detail, items);
     }
 
     /**
@@ -162,18 +173,20 @@ public class GlobalExceptionHandler {
      * @param e       方法参数内置校验异常
      * @param request 当前请求
      * @param response 当前响应，semantic 模式下用于设置语义化状态码
-     * @return code=PARAM_ERROR 的失败结果
+     * @return code=PARAM_ERROR 的失败结果，data 为校验明细列表
      */
     @ExceptionHandler(HandlerMethodValidationException.class)
-    public Result<Void> handleHandlerMethodValidation(HandlerMethodValidationException e, HttpServletRequest request,
-                                                      HttpServletResponse response) {
-        String detail = e.getParameterValidationResults().stream()
+    public Result<List<ParamErrorItem>> handleHandlerMethodValidation(HandlerMethodValidationException e,
+                                                                      HttpServletRequest request,
+                                                                      HttpServletResponse response) {
+        List<ParamErrorItem> items = e.getParameterValidationResults().stream()
                 .flatMap(result -> result.getResolvableErrors().stream()
-                        .map(error -> parameterName(result) + ": " + error.getDefaultMessage()))
-                .collect(Collectors.joining("; "));
+                        .map(error -> new ParamErrorItem(parameterName(result), error.getDefaultMessage())))
+                .toList();
+        String detail = joinParamDetail(items);
         log(properties.getLog().getParamLevel(), false,
                 "方法参数内置校验失败: uri={}, detail={}", request.getRequestURI(), detail);
-        return respond(response, ResultCode.PARAM_ERROR, detail);
+        return respond(response, ResultCode.PARAM_ERROR, detail, items);
     }
 
     /**
@@ -195,15 +208,25 @@ public class GlobalExceptionHandler {
 
     /**
      * 请求体不可读分支：JSON 格式错误、请求体类型不匹配等反序列化失败时触发。
+     * 类型不匹配（Jackson InvalidFormatException）时 message 附带出错字段路径，
+     * 如「字段 orders[0].count 类型不匹配」，便于前端定位；仅透出 JSON 字段名，
+     * 不透出目标类型与类名。semantic 模式下与其他参数类分支一致映射 HTTP 400。
      *
      * @param e       不可读异常
      * @param request 当前请求
+     * @param response 当前响应，semantic 模式下用于设置语义化状态码
      * @return code=PARAM_ERROR 的失败结果
      */
     @ExceptionHandler(HttpMessageNotReadableException.class)
-    public Result<Void> handleHttpMessageNotReadable(HttpMessageNotReadableException e, HttpServletRequest request) {
-        log(properties.getLog().getParamLevel(), true, "请求体解析失败: uri={}", request.getRequestURI(), e);
-        return Result.fail(ResultCode.PARAM_ERROR, "请求体格式错误");
+    public Result<Void> handleHttpMessageNotReadable(HttpMessageNotReadableException e, HttpServletRequest request,
+                                                     HttpServletResponse response) {
+        String fieldPath = RequestBodyErrorDetail.fieldPathOf(e);
+        String message = fieldPath != null
+                ? "请求体格式错误: 字段 " + fieldPath + " 类型不匹配"
+                : "请求体格式错误";
+        log(properties.getLog().getParamLevel(), true, "请求体解析失败: uri={}, message={}",
+                request.getRequestURI(), message, e);
+        return respond(response, ResultCode.PARAM_ERROR, message);
     }
 
     /**
@@ -302,7 +325,7 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 构造失败结果并按配置应用 HTTP 状态码（{@link ErrorCode} 重载）。
+     * 构造失败结果并按配置应用 HTTP 状态码（{@link ErrorCode} 重载，无数据）。
      *
      * @param response 当前响应
      * @param errorCode 错误码
@@ -310,7 +333,33 @@ public class GlobalExceptionHandler {
      * @return 携带错误码与提示的失败结果
      */
     private Result<Void> respond(HttpServletResponse response, ErrorCode errorCode, String message) {
-        return respond(response, errorCode.getCode(), message);
+        return respond(response, errorCode.getCode(), message, null);
+    }
+
+    /**
+     * 构造失败结果并按配置应用 HTTP 状态码（{@link ErrorCode} 重载，携带数据）。
+     *
+     * @param response 当前响应
+     * @param errorCode 错误码
+     * @param message   提示信息
+     * @param data      失败时携带的结构化数据，可为 null
+     * @param <T>      数据类型
+     * @return 携带错误码、提示与数据的失败结果
+     */
+    private <T> Result<T> respond(HttpServletResponse response, ErrorCode errorCode, String message, T data) {
+        return respond(response, errorCode.getCode(), message, data);
+    }
+
+    /**
+     * 构造失败结果并按配置应用 HTTP 状态码（无数据重载）。
+     *
+     * @param response 当前响应
+     * @param code     错误码数值
+     * @param message  提示信息
+     * @return 携带错误码与提示的失败结果
+     */
+    private Result<Void> respond(HttpServletResponse response, int code, String message) {
+        return respond(response, code, message, null);
     }
 
     /**
@@ -320,14 +369,29 @@ public class GlobalExceptionHandler {
      * @param response 当前响应
      * @param code     错误码数值
      * @param message  提示信息
-     * @return 携带错误码与提示的失败结果
+     * @param data     失败时携带的结构化数据（如参数校验明细），可为 null
+     * @param <T>      数据类型
+     * @return 携带错误码、提示与数据的失败结果
      */
-    private Result<Void> respond(HttpServletResponse response, int code, String message) {
-        Result<Void> result = Result.fail(code, message);
+    private <T> Result<T> respond(HttpServletResponse response, int code, String message, T data) {
+        Result<T> result = Result.fail(code, message);
+        result.setData(data);
         if (properties.getHttpStatusMode() == HttpStatusMode.SEMANTIC) {
             response.setStatus(HttpStatusCodeResolver.resolve(code));
         }
         return result;
+    }
+
+    /**
+     * 把参数校验明细拼接为「字段名: 原因」文本，供日志与 message 使用。
+     *
+     * @param items 校验明细条目
+     * @return 分号拼接的明细文本
+     */
+    private String joinParamDetail(List<ParamErrorItem> items) {
+        return items.stream()
+                .map(item -> item.field() + ": " + item.message())
+                .collect(Collectors.joining("; "));
     }
 
     /**
