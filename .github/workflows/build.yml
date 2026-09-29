@@ -18,7 +18,12 @@ jobs:
       matrix:
         include:
           - boot: 3.5.14
+            profile: ""
+          # Boot 4 job 须显式 -Pboot4：① 引 spring-boot-starter-webmvc-test 提供
+          # @AutoConfigureMockMvc 真实注解；② 显式指定 profile 会停用默认激活的
+          # compat35（3.5 兼容桥），避免 3.5 包名源码在 Boot 4 树编译失败
           - boot: 4.1.1
+            profile: "-Pboot4"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,4 +40,4 @@ jobs:
           if [ "${{ matrix.boot }}" != "3.5.14" ]; then
             sed -i '0,/<version>3\.5\.14<\/version>/s//<version>${{ matrix.boot }}<\/version>/' pom.xml
           fi
-          ./mvnw -B -ntp test
+          ./mvnw -B -ntp test ${{ matrix.profile }}
