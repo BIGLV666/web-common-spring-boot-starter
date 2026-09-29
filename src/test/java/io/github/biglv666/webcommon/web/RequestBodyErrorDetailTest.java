@@ -7,9 +7,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
- * {@link RequestBodyErrorDetail} 单元测试：用真实的 Jackson 2
- * {@code InvalidFormatException} 验证字段路径提取（测试类路径含 Jackson 2，
- * 与 Boot 3.x 运行时一致；Jackson 3 同形 API 经反射适配，无需重复验证）。
+ * {@link RequestBodyErrorDetail} 单元测试：分别用真实的 Jackson 2 与
+ * Jackson 3 {@code InvalidFormatException} 验证字段路径提取——两代
+ * 路径访问器不同名（2.x {@code getFieldName()} / 3.x {@code getPropertyName()}），
+ * 反射兜底逻辑需各跑一次。测试类路径同时含两代库。
  */
 class RequestBodyErrorDetailTest {
 
@@ -68,5 +69,20 @@ class RequestBodyErrorDetailTest {
      */
     private InvalidFormatException buildException() {
         return InvalidFormatException.from(null, "类型不匹配", "abc", Integer.class);
+    }
+
+    /**
+     * Jackson 3（tools.jackson）异常的路径访问器是 getPropertyName()，
+     * 与 2.x 的 getFieldName() 不同名，反射兜底必须命中。
+     */
+    @Test
+    void extractsFieldPathFromJackson3Exception() {
+        // Jackson 3 prependPath 按调用顺序逐段前置，先字段后下标再父字段
+        tools.jackson.databind.exc.InvalidFormatException root =
+                tools.jackson.databind.exc.InvalidFormatException.from(null, "类型不匹配", "abc", Integer.class);
+        root.prependPath(new Object(), "count");
+        root.prependPath(new Object(), 0);
+        root.prependPath(new Object(), "items");
+        assertEquals("items[0].count", RequestBodyErrorDetail.fieldPathOf(root));
     }
 }

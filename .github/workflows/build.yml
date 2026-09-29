@@ -10,6 +10,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # 双代适配需各跑一次全量测试：Boot 3.5 走 Jackson 2 路径，
+      # Boot 4.1 走 Jackson 3 路径（步骤内临时改写 parent 版本，checkout 干净无残留），
+      # 任一回归都能被 CI 拦下
+      matrix:
+        include:
+          - boot: 3.5.14
+          - boot: 4.1.1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,5 +30,9 @@ jobs:
           java-version: '17'
           cache: maven
 
-      - name: Test
-        run: ./mvnw -B -ntp test
+      - name: Test (Boot ${{ matrix.boot }})
+        run: |
+          if [ "${{ matrix.boot }}" != "3.5.14" ]; then
+            sed -i '0,/<version>3\.5\.14<\/version>/s//<version>${{ matrix.boot }}<\/version>/' pom.xml
+          fi
+          ./mvnw -B -ntp test

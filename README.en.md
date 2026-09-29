@@ -113,6 +113,8 @@ The endpoint returns every error code that passed startup validation (built-in +
 
 If the fixed path conflicts with business routes, or a custom output shape is needed, declare your own controller, inject `ErrorCodeRegistry`, and call `descriptors()` to read the same dictionary.
 
+> Deployment note: the endpoint is unauthenticated and its output includes internal enum class names. It is meant for frontend, QA, and gateway use on internal networks during integration; do not expose `/web-common/error-codes` on a public gateway route. If you must serve it publicly, use your own controller and put your own authentication in front of it.
+
 ## Global Exception Handling Coverage
 
 | Exception | Response |
@@ -177,6 +179,6 @@ git tag v0.3.0 && git push origin v0.3.0
 ## Local Build
 
 ```bash
-mvnw test        # run the integration test suite (49 test cases)
+mvnw test        # run the integration test suite (51 test cases)
 mvnw package     # package (jar + sources + javadoc)
 ```

@@ -88,6 +88,21 @@
             <optional>true</optional>
         </dependency>
         <!--
+            Jackson 2 databind（Boot 3.x 默认 JSON 库）：provided + optional，
+            仅供 Jackson2ResultJsonWriter / ResultJsonWriterFactory 编译期可见。
+            Boot 4 起 starter-web 默认只带 Jackson 3，Jackson 2 类型需显式声明；
+            显式版本与 Boot 3.5 BOM 管理值一致（2.21.2），Boot 4 BOM 的
+            jackson-2-bom（2.21.5）为同线补丁版本，API 兼容，两代依赖树均可
+            解析。运行期由使用方自带。
+        -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.21.2</version>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <!--
             Jackson 3.2 要求 jackson-annotations 2.22+（JsonApplyView 为 2.22 新增），
             显式提升覆盖父 POM 管理的 2.21，供 tools.jackson 编译与测试使用；
             注解 API 向后兼容，@JsonInclude 等主代码用法不受影响。provided 不向使用方传递，
@@ -193,4 +208,54 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            测试代码的 @AutoConfigureMockMvc import 统一取 Boot 4 包名
+            （boot.webmvc.test.autoconfigure，3.5 无此包，Boot 4 已删除 3.5 旧包），
+            两端各需一块补丁，二选一随父 POM 版本切换：
+            - 默认（Boot 3.5）：挂载 src/test-compat35 兼容桥（同名注解壳指向 3.5 真实注解）；
+            - boot4（CI Boot 4 job，父 POM 已被改写为 4.x）：引入 spring-boot-starter-webmvc-test
+              提供真正的同名注解。
+        -->
+        <profile>
+            <id>compat35</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.1</version>
+                        <executions>
+                            <execution>
+                                <id>add-boot35-compat-test-source</id>
+                                <phase>generate-test-sources</phase>
+                                <goals>
+                                    <goal>add-test-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>src/test-compat35</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>boot4</id>
+            <dependencies>
+                <dependency>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-webmvc-test</artifactId>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
 </project>

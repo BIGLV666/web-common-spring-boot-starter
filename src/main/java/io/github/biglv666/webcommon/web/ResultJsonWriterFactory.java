@@ -1,6 +1,5 @@
 package io.github.biglv666.webcommon.web;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.core.ResolvableType;
 import org.springframework.util.ClassUtils;
@@ -61,7 +60,8 @@ public final class ResultJsonWriterFactory {
         ClassLoader classLoader = ResultJsonWriterFactory.class.getClassLoader();
         if (ClassUtils.isPresent(JACKSON2_OBJECT_MAPPER, classLoader)) {
             Object mapper = jackson2MapperSupplier.get();
-            return new Jackson2ResultJsonWriter(mapper != null ? (ObjectMapper) mapper : new ObjectMapper());
+            return new Jackson2ResultJsonWriter(
+                    mapper != null ? mapper : new com.fasterxml.jackson.databind.ObjectMapper());
         }
         if (ClassUtils.isPresent(JACKSON3_OBJECT_MAPPER, classLoader)) {
             return new Jackson3ResultJsonWriter(jackson3MapperSupplier.get());

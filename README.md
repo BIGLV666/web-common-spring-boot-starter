@@ -115,6 +115,8 @@ public class WebConfig { }
 
 固定路径与业务路由冲突或需要自定义输出形态时，可自建 Controller 注入 `ErrorCodeRegistry`，调用 `descriptors()` 读取同一份字典。
 
+> 部署提示：端点未做鉴权，且输出内容包含内部枚举类全限定名。仅供前端、测试与网关在内网联调时取用，不要将 `/web-common/error-codes` 暴露到公网网关的公开路由；确有公网需求时改用自建 Controller，套上自己的鉴权后再输出。
+
 ## 全局异常处理覆盖范围
 
 | 异常 | 返回 |
@@ -179,6 +181,6 @@ git tag v0.3.0 && git push origin v0.3.0
 ## 本地构建
 
 ```bash
-mvnw test        # 运行集成测试（49 个用例）
+mvnw test        # 运行集成测试（51 个用例）
 mvnw package     # 打包（jar + sources + javadoc）
 ```

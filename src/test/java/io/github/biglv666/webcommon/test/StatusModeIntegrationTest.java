@@ -2,7 +2,7 @@ package io.github.biglv666.webcommon.test;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
@@ -38,6 +38,20 @@ class StatusModeIntegrationTest {
                         .content("{\"name\":\"\",\"age\":-1}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(40000));
+    }
+
+    /**
+     * 请求体反序列化失败（40000）与其他参数类分支一致映射为 HTTP 400。
+     * 0.4.0 前本分支未走语义化状态码逻辑，固定返回 200，此用例锁定修复后的行为。
+     */
+    @Test
+    void deserializeErrorMapsToHttpStatus400() throws Exception {
+        mockMvc.perform(post("/demo/deserialize")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"张三\",\"age\":\"abc\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40000))
+                .andExpect(jsonPath("$.message", containsString("字段 age")));
     }
 
     /**

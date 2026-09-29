@@ -14,7 +14,6 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
-import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 
@@ -34,8 +33,15 @@ import java.util.List;
  * </ul>
  *
  * <p>使用方自行声明同类型 Bean 即可覆盖对应默认实现。</p>
+ *
+ * <p>{@code after} 以字符串声明 Jackson 自动配置类名：Boot 3.x 的包是
+ * {@code autoconfigure.jackson}，Boot 4 起迁移为 {@code jackson.autoconfigure}，
+ * 引用 Class 字面量会在 Boot 4 下直接编译失败；字符串名仅影响排序，
+ * 两代均通过名称过滤生效，不存在的名字被忽略。</p>
  */
-@AutoConfiguration(after = JacksonAutoConfiguration.class)
+@AutoConfiguration(afterName = {
+        "org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration",
+        "org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration"})
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @EnableConfigurationProperties(WebCommonProperties.class)
 public class WebCommonAutoConfiguration {

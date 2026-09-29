@@ -7,9 +7,10 @@ import java.util.List;
  * 从请求体反序列化异常中提取出错字段路径。
  *
  * <p>底层异常可能是 Jackson 2（Boot 3.x）或 Jackson 3（Boot 4）的
- * {@code InvalidFormatException}，两者 API 同形但分属不同包；
- * 与 {@link ResultWrapAdvice} 的双代适配策略一致，这里通过反射读取，
- * 主代码不直接依赖任何 Jackson 类型，避免类加载耦合。</p>
+ * {@code InvalidFormatException}，两代包名不同且路径访问器不同名
+ * （2.x 为 {@code getFieldName()}，3.x 为 {@code getPropertyName()}）；
+ * 与 {@link ResultWrapAdvice} 的双代适配策略一致，这里通过反射按方法名
+ * 逐个兜底读取，主代码不直接依赖任何 Jackson 类型，避免类加载耦合。</p>
  *
  * <p>只提取 JSON 字段路径（如 {@code orders[0].count}），不透出目标类型、
  * 类名等内部信息，维持响应不泄露实现细节的原则。</p>
@@ -61,7 +62,11 @@ final class RequestBodyErrorDetail {
             }
             StringBuilder path = new StringBuilder();
             for (Object reference : references) {
+                // 字段名访问器两代不同名：Jackson 2 为 getFieldName()，Jackson 3 起为 getPropertyName()
                 String fieldName = invokeString(reference, "getFieldName");
+                if (fieldName == null) {
+                    fieldName = invokeString(reference, "getPropertyName");
+                }
                 if (fieldName != null && !fieldName.isEmpty()) {
                     // 字段段前补点（下标段紧贴前一段，无点）；path 为 items[0] 时接 count 应得 items[0].count
                     if (path.length() > 0) {
