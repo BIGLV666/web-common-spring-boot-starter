@@ -56,6 +56,14 @@ public class Result<T> {
     @Schema(description = "业务数据；参数校验失败时为校验明细列表，其余失败场景省略该字段")
     private T data;
 
+    /**
+     * 链路追踪标识，来自 MDC（key 见 {@code web-common.trace-id.mdc-key}）。
+     * 仅当 {@code web-common.trace-id.enabled=true} 时由 starter 填充；
+     * 功能关闭或当前请求无 traceId 时为 null 且不参与 JSON 序列化，响应结构与未启用时一致。
+     */
+    @Schema(description = "链路追踪标识，仅 trace-id 功能开启时出现，与 X-Trace-Id 响应头一致")
+    private String traceId;
+
     public Result() {
     }
 
@@ -169,5 +177,13 @@ public class Result<T> {
 
     public void setData(T data) {
         this.data = data;
+    }
+
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
     }
 }

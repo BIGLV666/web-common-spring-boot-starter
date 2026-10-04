@@ -3,6 +3,7 @@ package io.github.biglv666.webcommon.test;
 import io.github.biglv666.webcommon.annotation.DefaultErrorCode;
 import io.github.biglv666.webcommon.annotation.NoWrap;
 import io.github.biglv666.webcommon.exception.BusinessException;
+import io.github.biglv666.webcommon.result.PageResult;
 import io.github.biglv666.webcommon.result.Result;
 import io.github.biglv666.webcommon.result.ResultCode;
 import jakarta.validation.Valid;
@@ -16,6 +17,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+
+import java.util.List;
 
 /**
  * 集成测试用 demo 控制器，覆盖统一返回与全局异常处理的四条典型路径。
@@ -38,6 +41,23 @@ public class DemoController {
     @GetMapping("/demo/biz")
     public Result<Void> biz() {
         throw new BusinessException(ResultCode.CONFLICT, "用户名已被注册");
+    }
+
+    /**
+     * 路径二补充：业务异常使用错误码默认文案（不传自定义文案），
+     * 供 i18n 测试验证按 locale 解析 {@code web-common.error.{code}}。
+     */
+    @GetMapping("/demo/biz-default")
+    public Result<Void> bizDefault() {
+        throw new BusinessException(ResultCode.NOT_FOUND);
+    }
+
+    /**
+     * 分页路径：PageResult 结构演示，供分页响应形状测试。
+     */
+    @GetMapping("/demo/page")
+    public PageResult<DemoController.UserVO> page() {
+        return PageResult.of(List.of(new DemoController.UserVO("p1", 1), new DemoController.UserVO("p2", 2)), 15);
     }
 
     /**

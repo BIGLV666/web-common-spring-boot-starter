@@ -4,6 +4,7 @@ import io.github.biglv666.webcommon.annotation.DefaultErrorCode;
 import io.github.biglv666.webcommon.annotation.NoWrap;
 import io.github.biglv666.webcommon.exception.BusinessException;
 import io.github.biglv666.webcommon.result.ErrorCode;
+import io.github.biglv666.webcommon.result.PageResult;
 import io.github.biglv666.webcommon.result.Result;
 import io.github.biglv666.webcommon.result.ResultCode;
 import jakarta.validation.Valid;
@@ -15,6 +16,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * 示例控制器：覆盖统一返回、自动包装、声明式抛错、自建错误码等特性。
@@ -40,6 +43,14 @@ public class DemoController {
     @GetMapping("/user/{no}")
     public UserVO user(@PathVariable long no) {
         return new UserVO("张三", no);
+    }
+
+    /**
+     * 分页结构（0.4.0 新增）：data 为 {"total":...,"records":[...]}。
+     */
+    @GetMapping("/users")
+    public PageResult<UserVO> users() {
+        return PageResult.of(List.of(new UserVO("张三", 1), new UserVO("李四", 2)), 2);
     }
 
     /**

@@ -75,13 +75,22 @@ public class GlobalExceptionHandler {
 
     private final WebCommonProperties properties;
 
+    private final LocalizedMessageResolver messageResolver;
+
+    private final ExceptionMetrics metrics;
+
     /**
      * 构造全局异常处理器。
      *
-     * @param properties starter 配置项，决定日志级别与兜底消息透出开关
+     * @param properties      starter 配置项，决定日志级别与兜底消息透出开关
+     * @param messageResolver 文案解析器，错误码默认文案按 locale 走 i18n
+     * @param metrics         异常指标回调，可为 null（无监控接入时跳过）
      */
-    public GlobalExceptionHandler(WebCommonProperties properties) {
+    public GlobalExceptionHandler(WebCommonProperties properties, LocalizedMessageResolver messageResolver,
+                                  ExceptionMetrics metrics) {
         this.properties = properties;
+        this.messageResolver = messageResolver;
+        this.metrics = metrics;
     }
 
     /**
@@ -96,9 +105,11 @@ public class GlobalExceptionHandler {
     public Result<Void> handleBusinessException(BusinessException e, HttpServletRequest request,
                                                 HttpServletResponse response) {
         ErrorCode errorCode = e.getErrorCode();
+        // 自定义文案原样透出；为空或恰为错误码默认文案时按 locale 解析（i18n）
+        String message = messageResolver.resolveIfDefault(errorCode, e.getMessage());
         log(properties.getLog().getBusinessLevel(), false,
-                "业务异常: uri={}, code={}, message={}", request.getRequestURI(), errorCode.getCode(), e.getMessage());
-        return respond(response, errorCode.getCode(), e.getMessage());
+                "业务异常: uri={}, code={}, message={}", request.getRequestURI(), errorCode.getCode(), message);
+        return respond(response, errorCode.getCode(), message);
     }
 
     /**
@@ -270,7 +281,7 @@ public class GlobalExceptionHandler {
                                              HttpServletResponse response) {
         log(properties.getLog().getParamLevel(), false,
                 "请求路径不存在: uri={}", request.getRequestURI());
-        return respond(response, ResultCode.NOT_FOUND, ResultCode.NOT_FOUND.getMessage());
+        return respond(response, ResultCode.NOT_FOUND, messageResolver.resolveError(ResultCode.NOT_FOUND));
     }
 
     /**
@@ -288,7 +299,7 @@ public class GlobalExceptionHandler {
                                               HttpServletResponse response) {
         log(properties.getLog().getParamLevel(), false,
                 "请求路径不存在: uri={}", request.getRequestURI());
-        return respond(response, ResultCode.NOT_FOUND, ResultCode.NOT_FOUND.getMessage());
+        return respond(response, ResultCode.NOT_FOUND, messageResolver.resolveError(ResultCode.NOT_FOUND));
     }
 
     /**
@@ -309,9 +320,9 @@ public class GlobalExceptionHandler {
                                         HttpServletResponse response) {
         DefaultErrorCode declared = findDeclaredErrorCode(e.getClass());
         if (declared != null) {
-            // 声明式业务异常：message 取异常自身文案，为空回退错误码默认文案
+            // 声明式业务异常：自定义文案原样透出，为空或为默认文案时按 locale 解析
             ErrorCode errorCode = resolveDeclaredErrorCode(declared);
-            String message = e.getMessage() != null ? e.getMessage() : errorCode.getMessage();
+            String message = messageResolver.resolveIfDefault(errorCode, e.getMessage());
             log(properties.getLog().getBusinessLevel(), false,
                     "声明式业务异常: uri={}, code={}, message={}",
                     request.getRequestURI(), errorCode.getCode(), message);
@@ -320,7 +331,7 @@ public class GlobalExceptionHandler {
         log(properties.getLog().getSystemLevel(), true, "未捕获系统异常: uri={}", request.getRequestURI(), e);
         String message = properties.isExposeExceptionMessage()
                 ? e.getMessage()
-                : ResultCode.SYSTEM_ERROR.getMessage();
+                : messageResolver.resolveError(ResultCode.SYSTEM_ERROR);
         return respond(response, ResultCode.SYSTEM_ERROR.getCode(), message);
     }
 
@@ -376,10 +387,39 @@ public class GlobalExceptionHandler {
     private <T> Result<T> respond(HttpServletResponse response, int code, String message, T data) {
         Result<T> result = Result.fail(code, message);
         result.setData(data);
+        applyTraceId(result);
+        // 异常指标单点记录：所有失败路径都经本方法，无监控接入时 metrics 为 null 跳过
+        if (metrics != null) {
+            metrics.recordFailure(code);
+        }
         if (properties.getHttpStatusMode() == HttpStatusMode.SEMANTIC) {
             response.setStatus(HttpStatusCodeResolver.resolve(code));
         }
         return result;
+    }
+
+    /**
+     * 按配置填充 traceId：功能关闭或 MDC 无值时不填充，字段保持 null 不参与序列化，
+     * 响应结构与 trace-id 未启用时完全一致；已有值不覆盖。
+     *
+     * @param result 待写出的失败结果
+     */
+    private void applyTraceId(Result<?> result) {
+        WebCommonProperties.TraceId traceId = properties.getTraceId();
+        if (traceId.isEnabled() && result.getTraceId() == null) {
+            result.setTraceId(TraceIds.current(traceId.getMdcKey()));
+        }
+    }
+
+    /**
+     * 读取当前请求的 traceId 供日志输出，无值时回退「-」占位，
+     * 便于与响应 traceId 字段 / X-Trace-Id 响应头对账。
+     *
+     * @return 当前 traceId 或「-」
+     */
+    private String traceIdForLog() {
+        String current = TraceIds.current(properties.getTraceId().getMdcKey());
+        return current != null ? current : "-";
     }
 
     /**
@@ -450,6 +490,7 @@ public class GlobalExceptionHandler {
     /**
      * 按配置级别写异常日志：模板参数中的最后一个元素若为 Throwable 且 withStack=true，
      * 将作为异常堆栈交给 slf4j 输出；OFF/FATAL 级别静默跳过。
+     * 所有分支的日志统一追加 traceId（无值时为「-」），与响应 traceId 字段对账。
      *
      * @param level     配置的日志级别
      * @param withStack 是否要求附带异常堆栈（调用方需将异常作为最后一个参数传入）
@@ -465,12 +506,24 @@ public class GlobalExceptionHandler {
                 ? t
                 : null;
         Object[] logArgs = throwable != null ? Arrays.copyOf(args, args.length - 1) : args;
+        // 单点追加 traceId，避免每个分支的日志模板各自维护；
+        // 提取出的 Throwable 必须重新放回末尾，否则 slf4j 不再输出堆栈
+        Object[] logArgsWithTrace = throwable != null
+                ? Arrays.copyOf(logArgs, logArgs.length + 2)
+                : Arrays.copyOf(logArgs, logArgs.length + 1);
+        if (throwable == null) {
+            logArgsWithTrace[logArgsWithTrace.length - 1] = traceIdForLog();
+        } else {
+            logArgsWithTrace[logArgsWithTrace.length - 2] = traceIdForLog();
+            logArgsWithTrace[logArgsWithTrace.length - 1] = throwable;
+        }
+        String templateWithTrace = message + ", traceId={}";
         switch (level) {
-            case TRACE -> { if (log.isTraceEnabled()) log.trace(message, logArgs); }
-            case DEBUG -> { if (log.isDebugEnabled()) log.debug(message, logArgs); }
-            case INFO -> { if (log.isInfoEnabled()) log.info(message, logArgs); }
-            case WARN -> { if (log.isWarnEnabled()) log.warn(message, logArgs); }
-            case ERROR -> { if (log.isErrorEnabled()) log.error(message, logArgs); }
+            case TRACE -> { if (log.isTraceEnabled()) log.trace(templateWithTrace, logArgsWithTrace); }
+            case DEBUG -> { if (log.isDebugEnabled()) log.debug(templateWithTrace, logArgsWithTrace); }
+            case INFO -> { if (log.isInfoEnabled()) log.info(templateWithTrace, logArgsWithTrace); }
+            case WARN -> { if (log.isWarnEnabled()) log.warn(templateWithTrace, logArgsWithTrace); }
+            case ERROR -> { if (log.isErrorEnabled()) log.error(templateWithTrace, logArgsWithTrace); }
             default -> { /* 其余级别不输出 */ }
         }
     }

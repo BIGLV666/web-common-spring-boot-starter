@@ -10,7 +10,7 @@ Lightweight Spring Boot starter for the web layer: a unified `Result` response b
 <dependency>
     <groupId>io.github.biglv666</groupId>
     <artifactId>web-common-spring-boot-starter</artifactId>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
 </dependency>
 ```
 
@@ -24,6 +24,8 @@ HTTP status is always 200; success or failure is indicated by `code`:
 { "code": 0, "message": "操作成功", "data": { } }
 ```
 
+With trace-id exposure enabled (off by default), responses also carry an optional `traceId` field matching the `X-Trace-Id` response header; when disabled the field is absent and the structure is unchanged.
+
 ## Automatic Response Wrapping (enabled by default)
 
 Controllers return business objects directly; the starter wraps them into `Result` automatically, no `Result.ok(...)` boilerplate:
@@ -36,6 +38,8 @@ public UserVO getUser(@PathVariable Long id) {   // response becomes {"code":0,.
 ```
 
 When raw output is needed (file downloads, health checks, etc.), annotate the method or class with `@NoWrap` to opt out. Explicitly returning `Result` also works; both styles mix freely.
+
+Async return types (`CompletableFuture` / `Callable` / `DeferredResult`) are wrapped the same way: Spring MVC re-enters message conversion with the resolved value after async completion, so wrapping behaves identically to synchronous returns. springdoc / knife4j documentation endpoints (`/v3/api-docs`, swagger-ui resources, etc.) are automatically exempt so documentation keeps working.
 
 ## Business Exceptions
 
@@ -115,6 +119,71 @@ If the fixed path conflicts with business routes, or a custom output shape is ne
 
 > Deployment note: the endpoint is unauthenticated and its output includes internal enum class names. It is meant for frontend, QA, and gateway use on internal networks during integration; do not expose `/web-common/error-codes` on a public gateway route. If you must serve it publicly, use your own controller and put your own authentication in front of it.
 
+## Message i18n (enabled by default)
+
+Default error messages and the success message support localization: with the key conventions `web-common.error.{code}` (e.g. `web-common.error.51001`) and `web-common.success`, the starter resolves messages per request locale from the container `MessageSource` and **falls back to the enum's default message when the key is missing** — no impact without language resources, opt-in coverage once configured:
+
+```properties
+# i18n/messages_en.properties, together with spring.messages.basename=i18n/messages
+web-common.success=Success
+web-common.error.51001=Stock not enough
+```
+
+Only "default messages" are resolved: custom `BusinessException` messages and template-filled messages pass through as-is (parameterized localization is the business layer's job); validation details keep going through Hibernate Validator's own mechanism. The locale comes from `LocaleContextHolder` (respects the consumer's LocaleResolver, defaults to Accept-Language). Switch: `web-common.i18n.enabled` (default true).
+
+## Trace-Id Exposure (off by default)
+
+When enabled, both success and failure responses carry a traceId and the `X-Trace-Id` response header, so frontend incident reports map straight to server logs (global exception logs emit `traceId=` as well):
+
+```yaml
+web-common:
+  trace-id:
+    enabled: true
+    mdc-key: traceId          # default traceId, matching Micrometer Tracing / Spring Cloud conventions
+    response-header: X-Trace-Id  # set to empty string to disable the header
+```
+
+The traceId's single source is the MDC: with an existing tracing solution its value is reused as-is (never overwritten or cleaned up); without one, a built-in filter generates it and cleans up at request end. Cross-thread propagation for Servlet async endpoints is the tracing solution's responsibility — without tracing, async endpoints may lack a traceId.
+
+## Pagination with PageResult
+
+A unified page shape `{total, records}`; with automatic wrapping the response is `{"code":0,"data":{"total":...,"records":[...]}}`:
+
+```java
+@GetMapping("/users")
+public PageResult<UserVO> list(Pageable pageable) {
+    return PageResult.from(userService.page(pageable));   // one-line Spring Data Page conversion
+}
+
+// without Spring Data
+return PageResult.of(records, total);
+```
+
+## Observability (Micrometer exception metrics)
+
+When micrometer is on the classpath (present once actuator is included), every failed response increments a counter named `web.common.exceptions` with tags `code` (numeric code) and `category` (`param`/`business`/`system` segment classification). High-cardinality tags like uri are deliberately excluded. Declare your own `ExceptionMetrics` bean to plug into a custom monitoring stack.
+
+## Test Toolkit
+
+MockMvc assertion helpers for this starter's envelope contract, keeping test code focused on business semantics (shipped in the main artifact; reference it directly from test code):
+
+```java
+import static io.github.biglv666.webcommon.test.ResultMatchers.*;
+
+mockMvc.perform(get("/users/1"))
+        .andExpect(status().isOk())
+        .andDo(success());                        // code=0
+
+mockMvc.perform(get("/orders/1"))
+        .andDo(error(51001, "stock"));            // code + message fragment
+
+mockMvc.perform(post("/users", badBody))
+        .andDo(paramError("age", "positive"));    // per-field validation detail assertion
+
+mockMvc.perform(get("/users/1"))                  // with trace-id enabled
+        .andDo(traceId());                        // field matches the X-Trace-Id header
+```
+
 ## Global Exception Handling Coverage
 
 | Exception | Response |
@@ -152,33 +221,49 @@ web-common:
   expose-exception-message: false   # default false; enable temporarily while debugging, MUST be off in production
   error-codes:                      # business error-code enums, validated at startup (or use @ErrorCodeScan)
     - com.example.order.OrderErrorCode
+  trace-id:
+    enabled: false                  # default false; when on, responses carry traceId and the X-Trace-Id header
+    mdc-key: traceId                # MDC key for the traceId, matching mainstream tracing conventions
+    response-header: X-Trace-Id     # response header name, empty string disables it
+  i18n:
+    enabled: true                   # default true; resolves web-common.error.{code} via MessageSource, falls back when missing
   log:
     business-level: WARN            # log level for business exceptions, default WARN
     param-level: WARN               # log level for parameter-type exceptions, default WARN
     system-level: ERROR             # log level for system fallback exceptions, default ERROR
 ```
 
-Every exception branch logs the request URI, and levels are adjustable. Consumers may declare their own `GlobalExceptionHandler` / `ResultWrapAdvice` beans to override the defaults.
+Every exception branch logs the request URI and traceId, and levels are adjustable. Consumers may declare their own `GlobalExceptionHandler` / `ResultWrapAdvice` / `ExceptionMetrics` beans to override the defaults.
 
 ## API Documentation (springdoc / knife4j)
 
-Once the consumer project has springdoc-openapi or knife4j, the descriptions and example values on `Result` fields (from class-level Swagger annotations) appear in the generated docs automatically — no need to redefine the response structure.
+Once the consumer project has springdoc-openapi or knife4j, the descriptions and example values on `Result` and `PageResult` fields (from class-level Swagger annotations) appear in the generated docs automatically — no need to redefine the response structure. With `@EnableErrorCodeEndpoint` enabled (or `web-common.error-codes` configured on its own), the full error-code dictionary is also attached to the OpenAPI document root as an `x-error-codes` extension for frontend consumption straight from the swagger document:
+
+```json
+{
+  "openapi": "3.1.0",
+  "x-error-codes": [
+    { "code": 40000, "message": "参数错误", "enumClass": "...ResultCode", "constant": "PARAM_ERROR" },
+    { "code": 51001, "message": "库存不足", "enumClass": "com.example.order.OrderErrorCode", "constant": "STOCK_NOT_ENOUGH" }
+  ]
+}
+```
 
 ## Example Project
 
-[`examples/demo-app`](examples/demo-app) is a runnable, complete example (custom error codes, declarative exceptions, `@NoWrap`, etc.). First run `./mvnw install` at the repository root to install the starter locally, then run `../../mvnw -f pom.xml spring-boot:run` from the example directory.
+[`examples/demo-app`](examples/demo-app) is a runnable, complete example (custom error codes, declarative exceptions, `@NoWrap`, PageResult, traceId, i18n messages, etc.). First run `./mvnw install` at the repository root to install the starter locally, then run `../../mvnw -f pom.xml spring-boot:run` from the example directory.
 
 ## Release
 
 Maintainers push a `v*` tag to publish to Maven Central automatically (GitHub Actions, see `.github/workflows/publish.yml`); pushes to `main` and pull requests run the full test suite via `.github/workflows/build.yml`:
 
 ```bash
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.4.0 && git push origin v0.4.0
 ```
 
 ## Local Build
 
 ```bash
-mvnw test        # run the integration test suite (51 test cases)
+mvnw test        # run the integration test suite (88 test cases)
 mvnw package     # package (jar + sources + javadoc)
 ```

@@ -72,6 +72,12 @@ public class WebCommonProperties {
     /** 异常日志相关配置 */
     private final Log log = new Log();
 
+    /** 链路追踪标识相关配置 */
+    private final TraceId traceId = new TraceId();
+
+    /** i18n 文案相关配置 */
+    private final I18n i18n = new I18n();
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -124,6 +130,14 @@ public class WebCommonProperties {
         return log;
     }
 
+    public TraceId getTraceId() {
+        return traceId;
+    }
+
+    public I18n getI18n() {
+        return i18n;
+    }
+
     /**
      * 异常日志配置：各级别均可省略，默认业务/参数 WARN、系统 ERROR。
      */
@@ -160,6 +174,68 @@ public class WebCommonProperties {
 
         public void setSystemLevel(LogLevel systemLevel) {
             this.systemLevel = systemLevel;
+        }
+    }
+
+    /**
+     * 链路追踪标识配置：默认关闭，开启后成功与失败响应的 {@code Result} 均携带
+     * traceId（来源 MDC），并按配置写响应头。使用方已接入链路追踪
+     * （Micrometer Tracing / Spring Cloud 等，默认 MDC key 即 {@code traceId}）
+     * 时直接复用其值；未接入时由内置 {@code TraceIdFilter} 生成并管理生命周期。
+     */
+    public static class TraceId {
+
+        /** 是否启用 traceId 透出，默认 false，响应包络保持与未启用时一致 */
+        private boolean enabled = false;
+
+        /** traceId 的 MDC key，默认 {@code traceId}（与主流链路追踪组件约定一致） */
+        private String mdcKey = "traceId";
+
+        /** traceId 响应头名，默认 {@code X-Trace-Id}；配置为空串表示不写响应头 */
+        private String responseHeader = "X-Trace-Id";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getMdcKey() {
+            return mdcKey;
+        }
+
+        public void setMdcKey(String mdcKey) {
+            this.mdcKey = mdcKey;
+        }
+
+        public String getResponseHeader() {
+            return responseHeader;
+        }
+
+        public void setResponseHeader(String responseHeader) {
+            this.responseHeader = responseHeader;
+        }
+    }
+
+    /**
+     * i18n 文案配置：默认启用，错误码默认文案与成功文案按 key 约定
+     * （{@code web-common.error.{code}} / {@code web-common.success}）从
+     * MessageSource 解析，缺失即回退默认值，未配置语言资源时零影响。
+     * 业务自定义文案不参与解析。
+     */
+    public static class I18n {
+
+        /** 是否启用文案 i18n 解析，默认 true（无语言资源时行为与关闭等价） */
+        private boolean enabled = true;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 }

@@ -1,0 +1,18 @@
+# demo-app 容器化压测/演示环境。
+# 用法（需宿主机可访问 docker，首次先在仓库根目录 ./mvnw install -DskipTests -Dgpg.skip=true，
+# 再在 examples/demo-app 下 ./../../mvnw -f pom.xml package -DskipTests）：
+#   docker compose up --build -d
+#   python3 loadtest.py --scenario success --duration 20
+#   docker compose down
+services:
+  demo-app:
+    build: .
+    ports:
+      - "8080:8080"
+    # 打开 traceId 透出做对比压测时，用环境变量覆盖：
+    # environment:
+    #   WEB_COMMON_TRACE_ID_ENABLED: "true"
+    deploy:
+      resources:
+        limits:
+          memory: 512m

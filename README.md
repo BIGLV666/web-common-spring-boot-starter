@@ -12,7 +12,7 @@
 <dependency>
     <groupId>io.github.biglv666</groupId>
     <artifactId>web-common-spring-boot-starter</artifactId>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
 </dependency>
 ```
 
@@ -26,6 +26,8 @@ HTTP 状态码恒为 200，成败由 `code` 区分：
 { "code": 0, "message": "操作成功", "data": { } }
 ```
 
+开启 traceId 透出后（默认关闭），响应会额外携带可选的 `traceId` 字段，与 `X-Trace-Id` 响应头一致；未开启时字段不出现在 JSON 中，结构不变。
+
 ## 响应自动包装（默认开启）
 
 Controller 直接返回业务对象，starter 自动包装为 `Result`，无需手写 `Result.ok(...)`：
@@ -38,6 +40,8 @@ public UserVO getUser(@PathVariable Long id) {   // 返回自动变为 {"code":0
 ```
 
 需要原样输出（文件下载、健康检查等）时，在方法或类上标注 `@NoWrap` 豁免。也可显式返回 `Result`，两种风格混用没问题。
+
+异步返回类型（`CompletableFuture` / `Callable` / `DeferredResult`）同样自动包装：Spring MVC 在异步完成后携带解析值进入消息转换，包装行为与同步返回一致。springdoc / knife4j 的文档端点（`/v3/api-docs`、swagger-ui 资源等）自动豁免，不影响文档消费。
 
 ## 业务异常
 
@@ -117,6 +121,71 @@ public class WebConfig { }
 
 > 部署提示：端点未做鉴权，且输出内容包含内部枚举类全限定名。仅供前端、测试与网关在内网联调时取用，不要将 `/web-common/error-codes` 暴露到公网网关的公开路由；确有公网需求时改用自建 Controller，套上自己的鉴权后再输出。
 
+## 文案 i18n（默认开启）
+
+错误码默认文案与成功文案支持多语言：约定 key `web-common.error.{code}`（如 `web-common.error.51001`）与 `web-common.success`，starter 按请求 locale 从容器 `MessageSource` 解析，**查不到即回退枚举默认文案**——不配语言资源时零影响，配置后按需覆盖：
+
+```properties
+# i18n/messages_en.properties，配合 spring.messages.basename=i18n/messages
+web-common.success=Success
+web-common.error.51001=Stock not enough
+```
+
+解析范围仅限「默认文案」：`BusinessException` 的自定义文案、模板填充后的文案原样透出，参数化文案的多语言由业务层负责；参数校验明细仍走 Hibernate Validator 自身机制。locale 取 `LocaleContextHolder`（尊重使用方配置的 LocaleResolver，缺省按 Accept-Language）。开关：`web-common.i18n.enabled`（默认 true）。
+
+## traceId 透出（默认关闭）
+
+开启后成功与失败响应都携带 traceId，并写 `X-Trace-Id` 响应头，前端报障回传即可对上服务端日志（全局异常日志同步输出 `traceId=`）：
+
+```yaml
+web-common:
+  trace-id:
+    enabled: true
+    mdc-key: traceId          # 默认即 traceId，与 Micrometer Tracing / Spring Cloud 约定一致
+    response-header: X-Trace-Id  # 置空串可关闭响应头
+```
+
+traceId 唯一来源是 MDC：已接入链路追踪时直接复用其值（不覆盖、不清理生命周期）；未接入时内置过滤器生成并在请求结束时清理。Servlet 异步端点的跨线程传递由使用方的链路追踪组件负责，未接入时异步端点可能拿不到 traceId。
+
+## 分页结构 PageResult
+
+统一分页形状 `{total, records}`，自动包装后即 `{"code":0,"data":{"total":...,"records":[...]}}`：
+
+```java
+@GetMapping("/users")
+public PageResult<UserVO> list(Pageable pageable) {
+    return PageResult.from(userService.page(pageable));   // Spring Data Page 一行转换
+}
+
+// 不用 Spring Data 时
+return PageResult.of(records, total);
+```
+
+## 可观测（Micrometer 异常指标）
+
+类路径存在 micrometer（引入 actuator 即有）时，失败响应自动打点：计数器 `web.common.exceptions`，tag `code`（错误码数值）+ `category`（`param`/`business`/`system` 分段归类）。刻意不携带 uri 等高基数标签。需要接入自有监控时，声明自己的 `ExceptionMetrics` Bean 即可替换。
+
+## 测试工具包
+
+针对本 starter 包络契约的 MockMvc 断言工具，让测试代码聚焦业务语义（主 artifact 携带，测试代码直接引用即可）：
+
+```java
+import static io.github.biglv666.webcommon.test.ResultMatchers.*;
+
+mockMvc.perform(get("/users/1"))
+        .andExpect(status().isOk())
+        .andDo(success());                        // code=0
+
+mockMvc.perform(get("/orders/1"))
+        .andDo(error(51001, "库存不足"));          // code + message 片段
+
+mockMvc.perform(post("/users", badBody))
+        .andDo(paramError("age", "正数"));         // 校验明细按字段断言
+
+mockMvc.perform(get("/users/1"))                  // trace-id 开启时
+        .andDo(traceId());                        // 字段与 X-Trace-Id 头一致
+```
+
 ## 全局异常处理覆盖范围
 
 | 异常 | 返回 |
@@ -154,33 +223,49 @@ web-common:
   expose-exception-message: false   # 默认 false；联调时临时开启透出异常消息，生产必须关闭
   error-codes:                      # 业务错误码枚举，启动期冲突校验（也可用 @ErrorCodeScan）
     - com.example.order.OrderErrorCode
+  trace-id:
+    enabled: false                  # 默认 false；开启后响应携带 traceId 并写 X-Trace-Id 头
+    mdc-key: traceId                # traceId 的 MDC key，与主流链路追踪约定一致
+    response-header: X-Trace-Id     # 响应头名，空串关闭
+  i18n:
+    enabled: true                   # 默认 true；按 web-common.error.{code} 从 MessageSource 解析，缺失回退
   log:
     business-level: WARN            # 业务异常日志级别，默认 WARN
     param-level: WARN               # 参数类异常日志级别，默认 WARN
     system-level: ERROR             # 系统兜底异常日志级别，默认 ERROR
 ```
 
-各异常分支日志均携带请求 URI，级别可按需调整。使用方声明自己的 `GlobalExceptionHandler` / `ResultWrapAdvice` Bean 即可覆盖默认实现。
+各异常分支日志均携带请求 URI 与 traceId，级别可按需调整。使用方声明自己的 `GlobalExceptionHandler` / `ResultWrapAdvice` / `ExceptionMetrics` Bean 即可覆盖默认实现。
 
 ## API 文档（springdoc / knife4j）
 
-使用方工程引入 springdoc-openapi 或 knife4j 后，`Result` 字段的描述与示例值（来自类上的 Swagger 注解）会自动出现在文档中，无需重复定义返回结构。
+使用方工程引入 springdoc-openapi 或 knife4j 后，`Result`、`PageResult` 字段的描述与示例值（来自类上的 Swagger 注解）会自动出现在文档中，无需重复定义返回结构。开启 `@EnableErrorCodeEndpoint` 的同时（或单独配置 `web-common.error-codes`），全量错误码字典还会以 `x-error-codes` 扩展挂在 OpenAPI 文档根节点，前端从 swagger 文档即可消费：
+
+```json
+{
+  "openapi": "3.1.0",
+  "x-error-codes": [
+    { "code": 40000, "message": "参数错误", "enumClass": "...ResultCode", "constant": "PARAM_ERROR" },
+    { "code": 51001, "message": "库存不足", "enumClass": "com.example.order.OrderErrorCode", "constant": "STOCK_NOT_ENOUGH" }
+  ]
+}
+```
 
 ## 示例工程
 
-[`examples/demo-app`](examples/demo-app) 是可跑的完整示例（含自建错误码、声明式异常、@NoWrap 等）。先在仓库根目录 `./mvnw install` 安装 starter 到本地仓库，再进入示例目录 `../../mvnw -f pom.xml spring-boot:run`。
+[`examples/demo-app`](examples/demo-app) 是可跑的完整示例（含自建错误码、声明式异常、@NoWrap、PageResult、traceId、i18n 文案等）。先在仓库根目录 `./mvnw install` 安装 starter 到本地仓库，再进入示例目录 `../../mvnw -f pom.xml spring-boot:run`。
 
 ## 发布
 
 维护者推送 `v*` 标签即自动发布到 Maven Central（GitHub Actions，见 `.github/workflows/publish.yml`）：
 
 ```bash
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.4.0 && git push origin v0.4.0
 ```
 
 ## 本地构建
 
 ```bash
-mvnw test        # 运行集成测试（51 个用例）
+mvnw test        # 运行集成测试（88 个用例）
 mvnw package     # 打包（jar + sources + javadoc）
 ```

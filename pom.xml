@@ -13,7 +13,7 @@
 
     <groupId>io.github.biglv666</groupId>
     <artifactId>web-common-spring-boot-starter</artifactId>
-    <version>0.3.0</version>
+    <version>0.4.0</version>
     <packaging>jar</packaging>
 
     <name>web-common-spring-boot-starter</name>
@@ -45,6 +45,10 @@
     <properties>
         <java.version>17</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- springdoc 版本：Boot 3.x 线用 2.8.x；boot4 profile 切 3.x（Boot 4 线） -->
+        <springdoc.version>2.8.17</springdoc.version>
+        <!-- swagger 注解版本须与 springdoc 携带的 swagger-core 对齐，否则 NoSuchMethodError -->
+        <swagger.version>2.2.47</swagger.version>
     </properties>
 
     <dependencies>
@@ -64,13 +68,70 @@
             <scope>provided</scope>
         </dependency>
         <!--
+            Spring Data 通用接口：仅供 PageResult.from(Page) 编译期可见，
+            使用方用 Spring Data 分页时其依赖树自带；不用 Spring Data 时
+            走 PageResult.of，本依赖不传递、零影响。
+        -->
+        <dependency>
+            <groupId>org.springframework.data</groupId>
+            <artifactId>spring-data-commons</artifactId>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <!--
+            Micrometer：仅供 MicrometerExceptionMetrics 编译期可见，provided + optional；
+            使用方类路径有 micrometer（通常经 actuator）才生效，否则装配条件跳过。
+        -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <!--
+            以下三项（spring-test / json-path / hamcrest）仅供 ResultMatchers
+            测试工具类编译期可见，面向使用方的测试代码，不参与运行期；
+            全部 provided + optional，不向使用方传递。
+        -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-test</artifactId>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>com.jayway.jsonpath</groupId>
+            <artifactId>json-path</artifactId>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.hamcrest</groupId>
+            <artifactId>hamcrest</artifactId>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <!--
             Swagger 注解（CLASS 保留级别，运行期零依赖）：
             使用方工程里有 springdoc/knife4j 时，自动为 Result 字段生成文档描述与示例值。
         -->
         <dependency>
             <groupId>io.swagger.core.v3</groupId>
             <artifactId>swagger-annotations-jakarta</artifactId>
-            <version>2.2.30</version>
+            <version>${swagger.version}</version>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <!--
+            springdoc customizer 接口：仅供 ErrorCodeOpenApiCustomizer 编译期可见，
+            provided + optional；OpenAPI 模型（swagger-models）随本依赖传递解析，
+            版本与 springdoc 自身匹配，勿单独声明以免版本错配。
+            使用方工程无 springdoc 时装配按类名条件跳过，零影响。
+        -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-common</artifactId>
+            <version>${springdoc.version}</version>
             <scope>provided</scope>
             <optional>true</optional>
         </dependency>
@@ -125,6 +186,17 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            springdoc UI（含 starter-common 与自动配置）：仅测试期使用，
+            验证错误码字典 OpenAPI 扩展（x-error-codes）；版本随 profile
+            切换（默认 2.8.x 对 Boot 3.x，boot4 profile 为 3.x 对 Boot 4）。
+        -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>${springdoc.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -249,6 +321,11 @@
         </profile>
         <profile>
             <id>boot4</id>
+            <properties>
+                <!-- Boot 4 线使用 springdoc 3.x（接口 FQCN 与 2.x 一致则装配与测试同样生效） -->
+                <springdoc.version>3.1.1</springdoc.version>
+                <swagger.version>2.2.55</swagger.version>
+            </properties>
             <dependencies>
                 <dependency>
                     <groupId>org.springframework.boot</groupId>

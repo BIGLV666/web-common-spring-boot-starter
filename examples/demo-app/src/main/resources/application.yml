@@ -1,6 +1,11 @@
 server:
   port: 8080
 
+# 文案 i18n 资源位置：web-common 的 i18n 解析使用容器里的 MessageSource
+spring:
+  messages:
+    basename: i18n/messages
+
 web-common:
   # 全量默认配置示例（生产环境保持 expose-exception-message: false）
   enabled: true
@@ -13,6 +18,15 @@ web-common:
   # 错误码枚举也可改用 @ErrorCodeScan 注解按包扫描注册（见 README「自定义错误码」）
   error-codes:
     - io.github.biglv666.webcommon.demo.DemoController$OrderErrorCode
+  # traceId 透出（0.4.0 新增，默认关闭）：开启后 Result 携带 traceId 并写 X-Trace-Id 响应头
+  trace-id:
+    enabled: true
+    # mdc-key: traceId           # 默认即 traceId，与 Micrometer Tracing 约定一致
+    # response-header: X-Trace-Id
+  # 文案 i18n（0.4.0 新增，默认开启）：按 web-common.error.{code} / web-common.success
+  # 从 MessageSource 解析，缺失回退枚举默认文案（i18n/messages*.properties 见示例资源）
+  # i18n:
+  #   enabled: true
   log:
     business-level: WARN
     param-level: WARN

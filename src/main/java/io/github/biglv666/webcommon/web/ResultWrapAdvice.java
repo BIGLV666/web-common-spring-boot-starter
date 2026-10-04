@@ -1,7 +1,9 @@
 package io.github.biglv666.webcommon.web;
 
 import io.github.biglv666.webcommon.annotation.NoWrap;
+import io.github.biglv666.webcommon.config.WebCommonProperties;
 import io.github.biglv666.webcommon.result.Result;
+import io.github.biglv666.webcommon.result.ResultCode;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.StringHttpMessageConverter;
@@ -37,15 +39,24 @@ public class ResultWrapAdvice implements ResponseBodyAdvice<Object> {
 
     private final String successMessage;
 
+    private final WebCommonProperties.TraceId traceId;
+
+    private final LocalizedMessageResolver messageResolver;
+
     /**
      * 构造自动包装通知。
      *
-     * @param jsonWriter     String 返回的 JSON 序列化器，按类路径适配 Jackson 2/3
-     * @param successMessage 成功响应文案，取自 {@code web-common.success-message}
+     * @param jsonWriter      String 返回的 JSON 序列化器，按类路径适配 Jackson 2/3
+     * @param successMessage  成功响应文案，取自 {@code web-common.success-message}，作 i18n 回退默认值
+     * @param traceId         traceId 配置，启用时成功响应填充 {@code Result.traceId}
+     * @param messageResolver 文案解析器，成功文案按 locale 走 i18n
      */
-    public ResultWrapAdvice(ResultJsonWriter jsonWriter, String successMessage) {
+    public ResultWrapAdvice(ResultJsonWriter jsonWriter, String successMessage,
+                            WebCommonProperties.TraceId traceId, LocalizedMessageResolver messageResolver) {
         this.jsonWriter = jsonWriter;
         this.successMessage = successMessage;
+        this.traceId = traceId;
+        this.messageResolver = messageResolver;
     }
 
     /**
@@ -64,6 +75,11 @@ public class ResultWrapAdvice implements ResponseBodyAdvice<Object> {
         // ResponseBodyAdvice 会作用于异常处理方法的响应，若包装会破坏其自定义结构
         // （如 api-governance 的限流 429 响应），异常响应的形态由各自的处理器全权决定
         if (returnType.hasMethodAnnotation(org.springframework.web.bind.annotation.ExceptionHandler.class)) {
+            return false;
+        }
+        // API 文档端点（springdoc / knife4j）不包装：其响应体是文档 JSON 原文，
+        // 包装会破坏 swagger-ui 消费，byte[] 形态更会因消息转换器类型校验直接报错
+        if (isDocumentationEndpoint(returnType)) {
             return false;
         }
         // 方法或类上声明豁免的接口原样写出
@@ -94,19 +110,65 @@ public class ResultWrapAdvice implements ResponseBodyAdvice<Object> {
                                   Class<? extends org.springframework.http.converter.HttpMessageConverter<?>> converterType,
                                   ServerHttpRequest request, ServerHttpResponse response) {
         // 透传时 body 仍可能是 Result（如直接 return Result.ok()），统一兜住
-        if (body instanceof Result<?>) {
+        if (body instanceof Result<?> existing) {
+            applyTraceId(existing);
+            // 显式 Result.ok() 的默认成功文案同样按 locale 解析，与自动包装路径一致；
+            // 业务方显式指定的 message 不动
+            applySuccessMessage(existing);
             return body;
         }
         Result<Object> wrapped = Result.ok(body);
-        // 自动包装路径按配置取成功文案，不依赖静态默认值，避免多应用同 JVM 场景串配置
-        wrapped.setMessage(successMessage);
+        // 自动包装路径按配置取成功文案（i18n 按当前 locale 解析，缺失回退配置值），
+        // 不依赖静态默认值，避免多应用同 JVM 场景串配置
+        wrapped.setMessage(messageResolver.resolveSuccess(successMessage));
+        applyTraceId(wrapped);
         // String 走 StringHttpMessageConverter：包装对象再交出会被 toString 成 {"code":...} 字面量，
-        // 必须先序列化成 JSON 字符串；具体实现按类路径适配 Jackson 2/3
-        if (returnType.getParameterType() == String.class
-                && StringHttpMessageConverter.class.isAssignableFrom(converterType)) {
+        // 必须先序列化成 JSON 字符串；具体实现按类路径适配 Jackson 2/3。
+        // 声明类型与解析值类型都要看：异步返回（Callable<String> 等）解析值是 String
+        // 而声明类型不是，Accept: text/plain 时选中的正是 String 转换器，漏判会 ClassCastException
+        if (StringHttpMessageConverter.class.isAssignableFrom(converterType)
+                && (returnType.getParameterType() == String.class || body instanceof String)) {
             return jsonWriter.toJson(wrapped);
         }
         return wrapped;
+    }
+
+    /**
+     * 判断返回值所属控制器是否为 API 文档端点（springdoc / knife4j）。
+     * 这类端点输出文档 JSON 原文供 swagger-ui 消费，不属于业务统一包络的范围。
+     *
+     * @param returnType Controller 方法返回参数
+     * @return true 表示文档端点，跳过包装
+     */
+    private boolean isDocumentationEndpoint(MethodParameter returnType) {
+        String className = returnType.getContainingClass().getName();
+        return className.startsWith("org.springdoc.")
+                || className.startsWith("com.github.xiaoymin.knife4j.");
+    }
+
+    /**
+     * 按配置填充 traceId：功能关闭或 MDC 无值时不填充，字段保持 null 不参与序列化；
+     * 已有值（显式 {@code setTraceId}）不覆盖。
+     *
+     * @param result 待写出的结果
+     */
+    private void applyTraceId(Result<?> result) {
+        if (traceId.isEnabled() && result.getTraceId() == null) {
+            result.setTraceId(TraceIds.current(traceId.getMdcKey()));
+        }
+    }
+
+    /**
+     * 显式 {@code Result.ok()} 的默认成功文案按 locale 解析（i18n）：
+     * 仅当成功码且 message 恰为静态默认文案时替换，业务方显式指定的文案不动。
+     *
+     * @param result 待写出的成功结果
+     */
+    private void applySuccessMessage(Result<?> result) {
+        if (result.getCode() == ResultCode.SUCCESS.getCode()
+                && Result.getDefaultSuccessMessage().equals(result.getMessage())) {
+            result.setMessage(messageResolver.resolveSuccess(successMessage));
+        }
     }
 
     /**
