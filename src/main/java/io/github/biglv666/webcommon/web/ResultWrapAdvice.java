@@ -2,6 +2,7 @@ package io.github.biglv666.webcommon.web;
 
 import io.github.biglv666.webcommon.annotation.NoWrap;
 import io.github.biglv666.webcommon.config.WebCommonProperties;
+import io.github.biglv666.webcommon.result.PageResultNormalizer;
 import io.github.biglv666.webcommon.result.Result;
 import io.github.biglv666.webcommon.result.ResultCode;
 import org.springframework.core.MethodParameter;
@@ -14,6 +15,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
 
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.util.List;
 
 /**
  * 响应自动包装通知：Controller 直接返回业务对象，本通知统一包装为
@@ -23,6 +25,8 @@ import java.lang.reflect.Type;
  * <ul>
  *     <li>返回类型已是 {@code Result}（或 {@code ResponseEntity<Result>}）的不重复包装；</li>
  *     <li>方法或类上标注 {@link NoWrap} 的豁免（文件下载、健康检查等）；</li>
+ *     <li>返回 Spring Data {@code Page} 或 MyBatis-Plus {@code IPage} 时，
+ *         先经 {@link PageResultNormalizer} 归一为统一分页结构（含 {@code Result.data} 内的分页对象）；</li>
  *     <li>返回类型为 void（如某些写操作只回 200 空体）的跳过，不改变空响应语义；</li>
  *     <li>返回 String 时因 Spring 走 {@link StringHttpMessageConverter}，
  *         直接包装对象会被当成字符串内容，需先序列化为 JSON 字符串再交出；
@@ -43,8 +47,11 @@ public class ResultWrapAdvice implements ResponseBodyAdvice<Object> {
 
     private final LocalizedMessageResolver messageResolver;
 
+    /** 分页归一化扩展点，按 Bean 顺序匹配，默认包含 Spring Data / MyBatis-Plus 实现 */
+    private final List<PageResultNormalizer> pageResultNormalizers;
+
     /**
-     * 构造自动包装通知。
+     * 构造自动包装通知（兼容 0.4.0，不启用分页归一）。
      *
      * @param jsonWriter      String 返回的 JSON 序列化器，按类路径适配 Jackson 2/3
      * @param successMessage  成功响应文案，取自 {@code web-common.success-message}，作 i18n 回退默认值
@@ -53,10 +60,26 @@ public class ResultWrapAdvice implements ResponseBodyAdvice<Object> {
      */
     public ResultWrapAdvice(ResultJsonWriter jsonWriter, String successMessage,
                             WebCommonProperties.TraceId traceId, LocalizedMessageResolver messageResolver) {
+        this(jsonWriter, successMessage, traceId, messageResolver, List.of());
+    }
+
+    /**
+     * 构造自动包装通知。
+     *
+     * @param jsonWriter           String 返回的 JSON 序列化器，按类路径适配 Jackson 2/3
+     * @param successMessage       成功响应文案，取自 {@code web-common.success-message}，作 i18n 回退默认值
+     * @param traceId              traceId 配置，启用时成功响应填充 {@code Result.traceId}
+     * @param messageResolver      文案解析器，成功文案按 locale 走 i18n
+     * @param pageResultNormalizers 分页归一化扩展点，允许为空列表
+     */
+    public ResultWrapAdvice(ResultJsonWriter jsonWriter, String successMessage,
+                            WebCommonProperties.TraceId traceId, LocalizedMessageResolver messageResolver,
+                            List<PageResultNormalizer> pageResultNormalizers) {
         this.jsonWriter = jsonWriter;
         this.successMessage = successMessage;
         this.traceId = traceId;
         this.messageResolver = messageResolver;
+        this.pageResultNormalizers = pageResultNormalizers == null ? List.of() : List.copyOf(pageResultNormalizers);
     }
 
     /**
@@ -111,13 +134,15 @@ public class ResultWrapAdvice implements ResponseBodyAdvice<Object> {
                                   ServerHttpRequest request, ServerHttpResponse response) {
         // 透传时 body 仍可能是 Result（如直接 return Result.ok()），统一兜住
         if (body instanceof Result<?> existing) {
+            // 显式 Result.ok(page) 里的分页对象同样归一，避免手动包一层就绕过分页契约
+            normalizeResultData(existing);
             applyTraceId(existing);
             // 显式 Result.ok() 的默认成功文案同样按 locale 解析，与自动包装路径一致；
             // 业务方显式指定的 message 不动
             applySuccessMessage(existing);
             return body;
         }
-        Result<Object> wrapped = Result.ok(body);
+        Result<Object> wrapped = Result.ok(normalizePagination(body));
         // 自动包装路径按配置取成功文案（i18n 按当前 locale 解析，缺失回退配置值），
         // 不依赖静态默认值，避免多应用同 JVM 场景串配置
         wrapped.setMessage(messageResolver.resolveSuccess(successMessage));
@@ -156,6 +181,40 @@ public class ResultWrapAdvice implements ResponseBodyAdvice<Object> {
         if (traceId.isEnabled() && result.getTraceId() == null) {
             result.setTraceId(TraceIds.current(traceId.getMdcKey()));
         }
+    }
+
+    /**
+     * 归一 {@code Result.data} 内的分页对象：显式 {@code Result.ok(page)} 与
+     * 自动包装路径保持同一分页契约。非分页数据原样保留。
+     *
+     * @param result 显式构造的返回体
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void normalizeResultData(Result<?> result) {
+        Object data = result.getData();
+        Object normalized = normalizePagination(data);
+        if (normalized != data) {
+            ((Result) result).setData(normalized);
+        }
+    }
+
+    /**
+     * 按顺序匹配分页归一化扩展点，未命中或扩展点返回 null 时原样返回。
+     *
+     * @param body 响应体
+     * @return 归一后的分页结构，或原响应体
+     */
+    private Object normalizePagination(Object body) {
+        if (body == null) {
+            return null;
+        }
+        for (PageResultNormalizer normalizer : pageResultNormalizers) {
+            if (normalizer.supports(body)) {
+                Object normalized = normalizer.normalize(body);
+                return normalized != null ? normalized : body;
+            }
+        }
+        return body;
     }
 
     /**

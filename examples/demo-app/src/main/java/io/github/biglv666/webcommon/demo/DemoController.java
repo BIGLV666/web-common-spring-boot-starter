@@ -3,12 +3,16 @@ package io.github.biglv666.webcommon.demo;
 import io.github.biglv666.webcommon.annotation.DefaultErrorCode;
 import io.github.biglv666.webcommon.annotation.NoWrap;
 import io.github.biglv666.webcommon.exception.BusinessException;
+import io.github.biglv666.webcommon.result.CursorResult;
 import io.github.biglv666.webcommon.result.ErrorCode;
 import io.github.biglv666.webcommon.result.PageResult;
 import io.github.biglv666.webcommon.result.Result;
 import io.github.biglv666.webcommon.result.ResultCode;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -46,11 +50,53 @@ public class DemoController {
     }
 
     /**
-     * 分页结构（0.4.0 新增）：data 为 {"total":...,"records":[...]}。
+     * 偏移量分页：手动构造 PageResult，data 为 {"total":...,"records":[...]}。
      */
     @GetMapping("/users")
     public PageResult<UserVO> users() {
         return PageResult.of(List.of(new UserVO("张三", 1), new UserVO("李四", 2)), 2);
+    }
+
+    /**
+     * 偏移量分页自动归一（0.5.0 新增）：直接返回 Spring Data Page，
+     * data 自动变成 {total, records, current, size, pages}。
+     */
+    @GetMapping("/users/spring-page")
+    public Page<UserVO> springPage() {
+        return new PageImpl<>(List.of(new UserVO("王五", 3), new UserVO("赵六", 4)),
+                PageRequest.of(1, 2), 15);
+    }
+
+    /**
+     * 大分页自动归一：默认 1000 条，可用 size 调到 10000，用于压测归一化
+     * （列表拷贝）与序列化开销。
+     *
+     * @param size 每页条数，限制在 1~10000
+     * @return 大分页结果
+     */
+    @GetMapping("/users/spring-page-large")
+    public Page<UserVO> springPageLarge(@RequestParam(defaultValue = "1000") int size) {
+        int limit = Math.min(Math.max(size, 1), 10_000);
+        List<UserVO> records = java.util.stream.IntStream.range(0, limit)
+                .mapToObj(i -> new UserVO("user-" + i, i))
+                .toList();
+        return new PageImpl<>(records, PageRequest.of(0, limit), 100_000);
+    }
+
+    /**
+     * 游标分页（0.5.0 新增）：data 为 {records, nextCursor, hasNext}。
+     */
+    @GetMapping("/users/cursor")
+    public CursorResult<UserVO> cursor() {
+        return CursorResult.of(List.of(new UserVO("钱七", 5), new UserVO("孙八", 6)), "cursor-2");
+    }
+
+    /**
+     * 游标分页末页：nextCursor=null、hasNext=false。
+     */
+    @GetMapping("/users/cursor-last")
+    public CursorResult<UserVO> cursorLast() {
+        return CursorResult.last(List.of(new UserVO("周九", 7)));
     }
 
     /**

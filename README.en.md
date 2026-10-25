@@ -10,7 +10,7 @@ Lightweight Spring Boot starter for the web layer: a unified `Result` response b
 <dependency>
     <groupId>io.github.biglv666</groupId>
     <artifactId>web-common-spring-boot-starter</artifactId>
-    <version>0.4.0</version>
+    <version>0.5.0</version>
 </dependency>
 ```
 
@@ -145,19 +145,75 @@ web-common:
 
 The traceId's single source is the MDC: with an existing tracing solution its value is reused as-is (never overwritten or cleaned up); without one, a built-in filter generates it and cleans up at request end. Cross-thread propagation for Servlet async endpoints is the tracing solution's responsibility — without tracing, async endpoints may lack a traceId.
 
-## Pagination with PageResult
+## Pagination
 
-A unified page shape `{total, records}`; with automatic wrapping the response is `{"code":0,"data":{"total":...,"records":[...]}}`:
+### Offset pagination: PageResult
+
+The unified shape is `{total, records, current, size, pages}`; with automatic wrapping the response is `{"code":0,"data":{"total":15,"records":[...],"current":2,"size":2,"pages":8}}`. `current` is 1-based and `pages` is `ceil(total / size)`. The three metadata fields are optional: `PageResult.of(records, total)` outputs only `{total, records}`, exactly the 0.4.0 shape.
+
+**Automatic normalization (on by default)**: when a controller returns a Spring Data `Page` or a MyBatis-Plus `IPage`, the starter converts it to the unified structure — no manual `PageResult.from` needed:
 
 ```java
 @GetMapping("/users")
-public PageResult<UserVO> list(Pageable pageable) {
-    return PageResult.from(userService.page(pageable));   // one-line Spring Data Page conversion
+public Page<UserVO> list(Pageable pageable) {
+    return userService.page(pageable);   // becomes {total, records, current, size, pages}
 }
 
-// without Spring Data
-return PageResult.of(records, total);
+@GetMapping("/users-mp")
+public IPage<UserVO> listMp() {
+    return userService.pageMp(...);      // MyBatis-Plus is normalized the same way
+}
 ```
+
+- Spring Data page numbers are 0-based and become 1-based; both frameworks compute `pages` as `ceil(total / size)`.
+- MyBatis-Plus keeps only the five core fields and drops query-object internals such as `orders` and `optimizeCountSql`.
+- Explicit `Result.ok(page)`, `ResponseEntity<Page>` and async `Callable<Page>` are normalized as well.
+- Disable globally with `web-common.pagination.enabled=false`; exempt a single endpoint with `@NoWrap`.
+- Without Spring Data / MyBatis-Plus on the classpath, normalization is skipped and no hard dependency is added.
+- Other pagination frameworks: declare a `PageResultNormalizer` bean (see below).
+
+> **Upgrading to 0.5.0**: projects returning `IPage` directly will see the five core fields instead of the framework object (`orders`, `optimizeCountSql` and other internals are dropped). Set `web-common.pagination.enabled=false` to keep the old shape, or annotate a single endpoint with `@NoWrap`.
+
+### Cursor pagination: CursorResult
+
+Cursor pagination omits `total` and fits infinite scrolling, large datasets and count-free queries:
+
+```java
+@GetMapping("/messages")
+public CursorResult<MessageVO> list(@RequestParam(required = false) String cursor) {
+    List<MessageVO> records = messageService.next(cursor, 20);
+    return records.size() < 20
+            ? CursorResult.last(records)
+            : CursorResult.of(records, messageService.cursorOf(records.get(records.size() - 1)));
+}
+```
+
+Response:
+
+```json
+{ "code": 0, "data": { "records": [ ], "nextCursor": "eyJpZCI6MTAwfQ==", "hasNext": true } }
+```
+
+- On the last page `nextCursor` is `null` and `hasNext` is `false`; `hasNext` is a computed property that always equals `nextCursor != null`.
+- Cursor content is encoded by the application (id, id + timestamp, Base64 JSON, etc.); the starter defines no format and performs no encryption/signing.
+- Cursor pagination is intentionally not auto-normalized: Spring Data `Slice` has no cursor and MyBatis-Plus has no cursor type. Building it explicitly avoids a "has next page but no cursor" structure.
+
+### Custom pagination frameworks
+
+```java
+@Bean
+public PageResultNormalizer myPageNormalizer() {
+    return new PageResultNormalizer() {
+        public boolean supports(Object body) { return body instanceof MyPage<?>; }
+        public PageResult<?> normalize(Object body) {
+            MyPage<?> page = (MyPage<?>) body;
+            return PageResult.of(page.getList(), page.getTotal(), page.getPageNo(), page.getPageSize());
+        }
+    };
+}
+```
+
+Implementations are ordered by `@Order`; to override a built-in Spring Data / MyBatis-Plus type, give your normalizer a higher-precedence `@Order`. Implementations must be stateless and thread-safe.
 
 ## Observability (Micrometer exception metrics)
 
@@ -251,19 +307,19 @@ Once the consumer project has springdoc-openapi or knife4j, the descriptions and
 
 ## Example Project
 
-[`examples/demo-app`](examples/demo-app) is a runnable, complete example (custom error codes, declarative exceptions, `@NoWrap`, PageResult, traceId, i18n messages, etc.). First run `./mvnw install` at the repository root to install the starter locally, then run `../../mvnw -f pom.xml spring-boot:run` from the example directory.
+[`examples/demo-app`](examples/demo-app) is a runnable, complete example (custom error codes, declarative exceptions, `@NoWrap`, PageResult / CursorResult, traceId, i18n messages, etc.). First run `./mvnw install` at the repository root to install the starter locally, then run `../../mvnw -f pom.xml spring-boot:run` from the example directory.
 
 ## Release
 
 Maintainers push a `v*` tag to publish to Maven Central automatically (GitHub Actions, see `.github/workflows/publish.yml`); pushes to `main` and pull requests run the full test suite via `.github/workflows/build.yml`:
 
 ```bash
-git tag v0.4.0 && git push origin v0.4.0
+git tag v0.5.0 && git push origin v0.5.0
 ```
 
 ## Local Build
 
 ```bash
-mvnw test        # run the integration test suite (88 test cases)
+mvnw test        # run the integration test suite (124 test cases)
 mvnw package     # package (jar + sources + javadoc)
 ```

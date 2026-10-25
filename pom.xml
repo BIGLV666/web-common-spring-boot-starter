@@ -13,7 +13,7 @@
 
     <groupId>io.github.biglv666</groupId>
     <artifactId>web-common-spring-boot-starter</artifactId>
-    <version>0.4.0</version>
+    <version>0.5.0</version>
     <packaging>jar</packaging>
 
     <name>web-common-spring-boot-starter</name>
@@ -49,6 +49,8 @@
         <springdoc.version>2.8.17</springdoc.version>
         <!-- swagger 注解版本须与 springdoc 携带的 swagger-core 对齐，否则 NoSuchMethodError -->
         <swagger.version>2.2.47</swagger.version>
+        <!-- MyBatis-Plus 适配基准版本：IPage / Page 接口自 3.x 起保持稳定 -->
+        <mybatis-plus.version>3.5.12</mybatis-plus.version>
     </properties>
 
     <dependencies>
@@ -75,6 +77,18 @@
         <dependency>
             <groupId>org.springframework.data</groupId>
             <artifactId>spring-data-commons</artifactId>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <!--
+            MyBatis-Plus 分页接口：仅供 MybatisPlusPageResultNormalizer 编译期可见，
+            provided + optional。使用方引入 MP 时其依赖树自带；未使用时装配按类名
+            条件跳过，本依赖不传递、零影响。
+        -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-core</artifactId>
+            <version>${mybatis-plus.version}</version>
             <scope>provided</scope>
             <optional>true</optional>
         </dependency>
@@ -197,6 +211,16 @@
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>${springdoc.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            MyBatis-Plus 扩展：仅测试期使用，提供真实的 Page 实现来覆盖
+            MybatisPlusPageResultNormalizer；生产代码只依赖 core 的 IPage 接口。
+        -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-extension</artifactId>
+            <version>${mybatis-plus.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

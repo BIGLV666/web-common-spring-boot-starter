@@ -18,6 +18,10 @@ web-common:
   # 错误码枚举也可改用 @ErrorCodeScan 注解按包扫描注册（见 README「自定义错误码」）
   error-codes:
     - io.github.biglv666.webcommon.demo.DemoController$OrderErrorCode
+  # 分页自动归一（0.5.0 新增，默认开启）：Page/IPage 自动转 PageResult；
+  # 关闭后按框架原对象序列化，行为与 0.4.0 一致
+  # pagination:
+  #   enabled: true
   # traceId 透出（0.4.0 新增，默认关闭）：开启后 Result 携带 traceId 并写 X-Trace-Id 响应头
   trace-id:
     enabled: true

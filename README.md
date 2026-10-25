@@ -12,7 +12,7 @@
 <dependency>
     <groupId>io.github.biglv666</groupId>
     <artifactId>web-common-spring-boot-starter</artifactId>
-    <version>0.4.0</version>
+    <version>0.5.0</version>
 </dependency>
 ```
 
@@ -147,19 +147,75 @@ web-common:
 
 traceId 唯一来源是 MDC：已接入链路追踪时直接复用其值（不覆盖、不清理生命周期）；未接入时内置过滤器生成并在请求结束时清理。Servlet 异步端点的跨线程传递由使用方的链路追踪组件负责，未接入时异步端点可能拿不到 traceId。
 
-## 分页结构 PageResult
+## 分页
 
-统一分页形状 `{total, records}`，自动包装后即 `{"code":0,"data":{"total":...,"records":[...]}}`：
+### 偏移量分页 PageResult
+
+统一形状 `{total, records, current, size, pages}`，自动包装后即 `{"code":0,"data":{"total":15,"records":[...],"current":2,"size":2,"pages":8}}`。`current` 从 1 开始，`pages` 按 `ceil(total / size)` 计算；三个元数据字段可选，手动 `PageResult.of(records, total)` 时只输出 `{total, records}`，与 0.4.0 形状一致。
+
+**自动归一（默认开启）**：Controller 直接返回 Spring Data `Page` 或 MyBatis-Plus `IPage` 时，starter 自动转换为统一结构，无需手写 `PageResult.from`：
 
 ```java
 @GetMapping("/users")
-public PageResult<UserVO> list(Pageable pageable) {
-    return PageResult.from(userService.page(pageable));   // Spring Data Page 一行转换
+public Page<UserVO> list(Pageable pageable) {
+    return userService.page(pageable);   // 自动变成 {total, records, current, size, pages}
 }
 
-// 不用 Spring Data 时
-return PageResult.of(records, total);
+@GetMapping("/users-mp")
+public IPage<UserVO> listMp() {
+    return userService.pageMp(...);      // MyBatis-Plus 同样自动归一
+}
 ```
+
+- Spring Data 页码 0-based 转 1-based；两个框架的总页数统一按 `ceil(total / size)` 计算。
+- MyBatis-Plus 只保留五个核心字段，丢弃 `orders`、`optimizeCountSql` 等查询对象内部状态。
+- 显式 `Result.ok(page)`、`ResponseEntity<Page>`、异步 `Callable<Page>` 同样归一。
+- 关闭：`web-common.pagination.enabled=false`；单接口豁免：`@NoWrap`。
+- 未引入 Spring Data / MyBatis-Plus 时自动跳过，不产生任何强制依赖。
+- 其他分页框架：声明 `PageResultNormalizer` Bean 即可接入（见下文）。
+
+> **0.5.0 升级提示**：直接返回 `IPage` 的项目升级后，响应会从框架原始对象变为五个核心字段（`orders`、`optimizeCountSql` 等内部状态不再出现）。需要保持原样时设置 `web-common.pagination.enabled=false`，或给单个接口加 `@NoWrap`。
+
+### 游标分页 CursorResult
+
+游标分页不返回 `total`，适合无限滚动、大数据量、避免 count 查询：
+
+```java
+@GetMapping("/messages")
+public CursorResult<MessageVO> list(@RequestParam(required = false) String cursor) {
+    List<MessageVO> records = messageService.next(cursor, 20);
+    return records.size() < 20
+            ? CursorResult.last(records)
+            : CursorResult.of(records, messageService.cursorOf(records.get(records.size() - 1)));
+}
+```
+
+响应：
+
+```json
+{ "code": 0, "data": { "records": [ ], "nextCursor": "eyJpZCI6MTAwfQ==", "hasNext": true } }
+```
+
+- 末页 `nextCursor=null`、`hasNext=false`；`hasNext` 是计算属性，恒等于 `nextCursor != null`。
+- 游标内容由业务编码（id、id + 时间、Base64 JSON 等），starter 不定义格式、不做加解密与签名。
+- 游标分页不做框架自动归一：Spring Data `Slice` 没有游标，MyBatis-Plus 没有游标类型；由业务显式构造，避免生成“有下一页但拿不到游标”的假结构。
+
+### 自定义分页框架
+
+```java
+@Bean
+public PageResultNormalizer myPageNormalizer() {
+    return new PageResultNormalizer() {
+        public boolean supports(Object body) { return body instanceof MyPage<?>; }
+        public PageResult<?> normalize(Object body) {
+            MyPage<?> page = (MyPage<?>) body;
+            return PageResult.of(page.getList(), page.getTotal(), page.getPageNo(), page.getPageSize());
+        }
+    };
+}
+```
+
+多个实现按 `@Order` 排序；需要覆盖内置的 Spring Data / MyBatis-Plus 类型时，给自定义实现加 `@Order` 提高优先级。实现必须无状态、线程安全。
 
 ## 可观测（Micrometer 异常指标）
 
@@ -253,19 +309,19 @@ web-common:
 
 ## 示例工程
 
-[`examples/demo-app`](examples/demo-app) 是可跑的完整示例（含自建错误码、声明式异常、@NoWrap、PageResult、traceId、i18n 文案等）。先在仓库根目录 `./mvnw install` 安装 starter 到本地仓库，再进入示例目录 `../../mvnw -f pom.xml spring-boot:run`。
+[`examples/demo-app`](examples/demo-app) 是可跑的完整示例（含自建错误码、声明式异常、@NoWrap、PageResult / CursorResult、traceId、i18n 文案等）。先在仓库根目录 `./mvnw install` 安装 starter 到本地仓库，再进入示例目录 `../../mvnw -f pom.xml spring-boot:run`。
 
 ## 发布
 
 维护者推送 `v*` 标签即自动发布到 Maven Central（GitHub Actions，见 `.github/workflows/publish.yml`）：
 
 ```bash
-git tag v0.4.0 && git push origin v0.4.0
+git tag v0.5.0 && git push origin v0.5.0
 ```
 
 ## 本地构建
 
 ```bash
-mvnw test        # 运行集成测试（88 个用例）
+mvnw test        # 运行集成测试（124 个用例）
 mvnw package     # 打包（jar + sources + javadoc）
 ```

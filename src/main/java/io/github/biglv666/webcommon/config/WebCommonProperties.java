@@ -17,6 +17,8 @@ import java.util.List;
  *     auto-wrap: true                      # 是否启用响应自动包装，默认 true
  *     http-status-mode: ALWAYS_200         # HTTP 状态码模式，默认恒为 200，可选 SEMANTIC
  *     expose-exception-message: false      # 兜底异常是否透出原始消息，默认 false
+ *     pagination:
+ *         enabled: true                    # 是否把 Page/IPage 自动归一为 PageResult，默认 true
  *     error-codes:                         # 业务方错误码枚举，启动期做冲突校验
  *         - com.example.order.OrderErrorCode
  *     log:
@@ -78,6 +80,9 @@ public class WebCommonProperties {
     /** i18n 文案相关配置 */
     private final I18n i18n = new I18n();
 
+    /** 分页归一相关配置 */
+    private final Pagination pagination = new Pagination();
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -136,6 +141,10 @@ public class WebCommonProperties {
 
     public I18n getI18n() {
         return i18n;
+    }
+
+    public Pagination getPagination() {
+        return pagination;
     }
 
     /**
@@ -228,6 +237,27 @@ public class WebCommonProperties {
     public static class I18n {
 
         /** 是否启用文案 i18n 解析，默认 true（无语言资源时行为与关闭等价） */
+        private boolean enabled = true;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+    }
+
+    /**
+     * 分页归一配置：默认开启。开启后 Controller 直接返回 Spring Data
+     * {@code Page} 或 MyBatis-Plus {@code IPage} 会自动转为
+     * {@code PageResult}（{@code total/records/current/size/pages}）；
+     * 关闭后按原对象序列化，行为与 0.4.0 一致。单个接口可用
+     * {@code @NoWrap} 豁免。
+     */
+    public static class Pagination {
+
+        /** 是否启用框架分页对象自动归一，默认 true */
         private boolean enabled = true;
 
         public boolean isEnabled() {

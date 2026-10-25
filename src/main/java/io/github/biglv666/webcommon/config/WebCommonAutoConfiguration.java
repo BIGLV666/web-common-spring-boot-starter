@@ -1,6 +1,7 @@
 package io.github.biglv666.webcommon.config;
 
 import io.github.biglv666.webcommon.result.ErrorCode;
+import io.github.biglv666.webcommon.result.PageResultNormalizer;
 import io.github.biglv666.webcommon.result.Result;
 import io.github.biglv666.webcommon.web.ErrorCodeOpenApiCustomizer;
 import io.github.biglv666.webcommon.web.ErrorCodeRegistry;
@@ -8,9 +9,11 @@ import io.github.biglv666.webcommon.web.ExceptionMetrics;
 import io.github.biglv666.webcommon.web.GlobalExceptionHandler;
 import io.github.biglv666.webcommon.web.LocalizedMessageResolver;
 import io.github.biglv666.webcommon.web.MicrometerExceptionMetrics;
+import io.github.biglv666.webcommon.web.MybatisPlusPageResultNormalizer;
 import io.github.biglv666.webcommon.web.ResultJsonWriterFactory;
 import io.github.biglv666.webcommon.web.ResultWrapAdvice;
 import io.github.biglv666.webcommon.web.ScannedErrorCodes;
+import io.github.biglv666.webcommon.web.SpringDataPageResultNormalizer;
 import io.github.biglv666.webcommon.web.TraceIdFilter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springdoc.core.customizers.OpenApiCustomizer;
@@ -28,6 +31,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.MessageSource;
 import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -104,6 +108,66 @@ public class WebCommonAutoConfiguration {
     }
 
     /**
+     * 分页归一装配总开关：{@code web-common.enabled=false} 或
+     * {@code web-common.pagination.enabled=false} 时整体跳过。
+     * 内层按类路径分别装配 Spring Data / MyBatis-Plus 实现。
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(prefix = "web-common", name = "enabled",
+            havingValue = "true", matchIfMissing = true)
+    static class PaginationConfiguration {
+
+        /**
+         * Spring Data 分页归一装配：类路径存在 spring-data-commons 且
+         * {@code web-common.pagination.enabled=true}（默认）时注册。
+         * {@code @ConditionalOnClass} 使用类名字符串，无 Spring Data 的环境
+         * 不会触发类型加载。
+         */
+        @Configuration(proxyBeanMethods = false)
+        @ConditionalOnClass(name = "org.springframework.data.domain.Page")
+        @ConditionalOnProperty(prefix = "web-common.pagination", name = "enabled",
+                havingValue = "true", matchIfMissing = true)
+        static class SpringDataPaginationConfiguration {
+
+            /**
+             * 注册 Spring Data Page 归一实现。
+             * 顺序取最低优先级，需要覆盖该类型的自定义 Normalizer 用 {@code @Order} 提高优先级。
+             *
+             * @return 分页归一实现
+             */
+            @Bean
+            @Order(Ordered.LOWEST_PRECEDENCE)
+            public PageResultNormalizer springDataPageResultNormalizer() {
+                return new SpringDataPageResultNormalizer();
+            }
+        }
+
+        /**
+         * MyBatis-Plus 分页归一装配：类路径存在 mybatis-plus-core 且
+         * {@code web-common.pagination.enabled=true}（默认）时注册。
+         * 按类名条件判断，未引入 MyBatis-Plus 的环境零影响。
+         */
+        @Configuration(proxyBeanMethods = false)
+        @ConditionalOnClass(name = "com.baomidou.mybatisplus.core.metadata.IPage")
+        @ConditionalOnProperty(prefix = "web-common.pagination", name = "enabled",
+                havingValue = "true", matchIfMissing = true)
+        static class MybatisPlusPaginationConfiguration {
+
+            /**
+             * 注册 MyBatis-Plus IPage 归一实现。
+             * 顺序取最低优先级，需要覆盖该类型的自定义 Normalizer 用 {@code @Order} 提高优先级。
+             *
+             * @return 分页归一实现
+             */
+            @Bean
+            @Order(Ordered.LOWEST_PRECEDENCE)
+            public PageResultNormalizer mybatisPlusPageResultNormalizer() {
+                return new MybatisPlusPageResultNormalizer();
+            }
+        }
+    }
+
+    /**
      * 注册全局异常处理器。
      *
      * @param properties      starter 配置项
@@ -128,8 +192,10 @@ public class WebCommonAutoConfiguration {
      * Jackson 类型（含泛型引用），保证纯 Jackson 3 环境的 Bean 方法
      * 依赖解析不会触发类加载。
      *
-     * @param beanFactory Bean 工厂，供按类名延迟解析两代 Jackson Mapper
-     * @param properties  starter 配置项
+     * @param beanFactory        Bean 工厂，供按类名延迟解析两代 Jackson Mapper
+     * @param properties         starter 配置项
+     * @param messageResolver    文案解析器
+     * @param normalizerProvider 分页归一扩展点，未引入分页框架时为空
      * @return 自动包装通知实例
      */
     @Bean
@@ -138,12 +204,14 @@ public class WebCommonAutoConfiguration {
             havingValue = "true", matchIfMissing = true)
     public ResultWrapAdvice resultWrapAdvice(ConfigurableListableBeanFactory beanFactory,
                                              WebCommonProperties properties,
-                                             LocalizedMessageResolver messageResolver) {
+                                             LocalizedMessageResolver messageResolver,
+                                             ObjectProvider<PageResultNormalizer> normalizerProvider) {
         return new ResultWrapAdvice(
                 ResultJsonWriterFactory.create(beanFactory),
                 properties.getSuccessMessage(),
                 properties.getTraceId(),
-                messageResolver);
+                messageResolver,
+                normalizerProvider.orderedStream().toList());
     }
 
     /**

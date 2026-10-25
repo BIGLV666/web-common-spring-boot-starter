@@ -1,8 +1,10 @@
 package io.github.biglv666.webcommon.test;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import io.github.biglv666.webcommon.annotation.DefaultErrorCode;
 import io.github.biglv666.webcommon.annotation.NoWrap;
 import io.github.biglv666.webcommon.exception.BusinessException;
+import io.github.biglv666.webcommon.result.CursorResult;
 import io.github.biglv666.webcommon.result.PageResult;
 import io.github.biglv666.webcommon.result.Result;
 import io.github.biglv666.webcommon.result.ResultCode;
@@ -10,6 +12,10 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,6 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.List;
+import java.util.concurrent.Callable;
 
 /**
  * 集成测试用 demo 控制器，覆盖统一返回与全局异常处理的四条典型路径。
@@ -58,6 +65,83 @@ public class DemoController {
     @GetMapping("/demo/page")
     public PageResult<DemoController.UserVO> page() {
         return PageResult.of(List.of(new DemoController.UserVO("p1", 1), new DemoController.UserVO("p2", 2)), 15);
+    }
+
+    /**
+     * 分页自动归一：直接返回 Spring Data Page，应被包成统一分页结构
+     * （页码 1-based，总页数 ceil(total / size)）。
+     */
+    @GetMapping("/demo/page-spring")
+    public Page<UserVO> pageSpring() {
+        return new PageImpl<>(List.of(new UserVO("s1", 1), new UserVO("s2", 2)), PageRequest.of(1, 2), 15);
+    }
+
+    /**
+     * 分页自动归一：直接返回 MyBatis-Plus IPage，只保留前端需要的五个字段。
+     */
+    @GetMapping("/demo/page-mp")
+    public IPage<UserVO> pageMp() {
+        com.baomidou.mybatisplus.extension.plugins.pagination.Page<UserVO> page =
+                new com.baomidou.mybatisplus.extension.plugins.pagination.Page<>(2, 2, 15);
+        page.setRecords(List.of(new UserVO("m1", 1), new UserVO("m2", 2)));
+        return page;
+    }
+
+    /**
+     * 显式 Result 包裹 Page：data 内的分页对象同样应被归一。
+     */
+    @GetMapping("/demo/result-page")
+    public Result<Page<UserVO>> resultPage() {
+        return Result.ok(new PageImpl<>(List.of(new UserVO("r1", 1)), PageRequest.of(0, 10), 1));
+    }
+
+    /**
+     * 分页自动归一：ResponseEntity 包裹 Page。
+     */
+    @GetMapping("/demo/response-entity-page")
+    public ResponseEntity<Page<UserVO>> responseEntityPage() {
+        return ResponseEntity.ok(new PageImpl<>(List.of(new UserVO("e1", 1)), PageRequest.of(0, 10), 1));
+    }
+
+    /**
+     * 分页自动归一：异步返回 Page，异步完成后仍应归一。
+     */
+    @GetMapping("/demo/page-async")
+    public Callable<Page<UserVO>> pageAsync() {
+        return () -> new PageImpl<>(List.of(new UserVO("a1", 1)), PageRequest.of(0, 10), 1);
+    }
+
+    /**
+     * @NoWrap 豁免：Page 原样输出，不被归一。
+     */
+    @NoWrap
+    @GetMapping("/demo/nowrap-page")
+    public Page<UserVO> nowrapPage() {
+        return new PageImpl<>(List.of(new UserVO("n1", 1)), PageRequest.of(0, 10), 1);
+    }
+
+    /**
+     * 游标分页：显式构造 CursorResult，有下一页。
+     */
+    @GetMapping("/demo/cursor")
+    public CursorResult<UserVO> cursor() {
+        return CursorResult.of(List.of(new UserVO("c1", 1), new UserVO("c2", 2)), "cursor-2");
+    }
+
+    /**
+     * 游标分页：末页，nextCursor 为 null。
+     */
+    @GetMapping("/demo/cursor-last")
+    public CursorResult<UserVO> cursorLast() {
+        return CursorResult.last(List.of(new UserVO("c3", 3)));
+    }
+
+    /**
+     * 显式 Result 包裹 CursorResult：非框架分页对象，原样作为 data。
+     */
+    @GetMapping("/demo/result-cursor")
+    public Result<CursorResult<UserVO>> resultCursor() {
+        return Result.ok(CursorResult.of(List.of(new UserVO("c4", 4)), "cursor-3"));
     }
 
     /**
