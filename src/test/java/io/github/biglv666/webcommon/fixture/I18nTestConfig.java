@@ -27,6 +27,9 @@ public class I18nTestConfig {
         ResourceBundleMessageSource source = new ResourceBundleMessageSource();
         source.setBasename("i18n/messages");
         source.setDefaultEncoding("UTF-8");
+        // 关闭“回退系统默认 locale”：否则 CI（默认 en）会把 zh_CN 请求解析到
+        // messages_en，而本地中文环境解析到基础 bundle，导致用例结果依赖机器语言。
+        source.setFallbackToSystemLocale(false);
         return source;
     }
 }
