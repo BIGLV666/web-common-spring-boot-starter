@@ -2,3 +2,9 @@ target/
 .idea/
 *.iml
 .mimosa/
+
+# Eclipse / IDE 本地产物
+.classpath
+.factorypath
+.project
+.settings/
